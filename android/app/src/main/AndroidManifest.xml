@@ -37,5 +37,18 @@
         <data android:scheme="exp+haileys-study-room"/>
       </intent-filter>
     </activity>
+
+    <!-- Word of the Day home screen widget -->
+    <receiver
+      android:name="com.lvhtony.haileysStudyRoom.StudyRoomWidgetProvider"
+      android:exported="true">
+      <intent-filter>
+        <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
+      </intent-filter>
+      <meta-data
+        android:name="android.appwidget.provider"
+        android:resource="@xml/study_room_widget_info"/>
+    </receiver>
+
   </application>
 </manifest>
