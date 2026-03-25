@@ -17,6 +17,7 @@
     "expo-av": "^16.0.8",
     "expo-background-fetch": "~55.0.10",
     "expo-constants": "~55.0.9",
+    "expo-dev-client": "~55.0.18",
     "expo-device": "~55.0.10",
     "expo-image": "~55.0.6",
     "expo-linking": "~55.0.8",

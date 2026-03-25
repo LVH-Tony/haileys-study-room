@@ -1,3 +1,4 @@
+import 'expo-dev-client';
 import { useEffect } from 'react';
 import { AppState, AppStateStatus } from 'react-native';
 import { Stack, useRouter, useSegments } from 'expo-router';
