@@ -1,5 +1,6 @@
 /**
- * Expo config plugin: injects the Study Room Android widget into the native project.
+ * Expo config plugin: injects the Study Room Android widget into the native project
+ * and pins Gradle to a compatible version.
  * Runs automatically during `expo prebuild` so customizations survive CNG rebuilds.
  */
 const { withAndroidManifest, withDangerousMod } = require('@expo/config-plugins');
@@ -25,7 +26,6 @@ function withWidgetManifest(config) {
     const manifest = config.modResults;
     const app = manifest.manifest.application[0];
 
-    // Avoid duplicates
     if (!app.receiver) app.receiver = [];
     const alreadyAdded = app.receiver.some(
       (r) => r.$?.['android:name']?.includes('StudyRoomWidgetProvider')
@@ -72,8 +72,31 @@ function withWidgetXml(config) {
   ]);
 }
 
+// Step 3: Pin Gradle to 8.10.2 (Gradle 9 breaks React Native IBM_SEMERU toolchain)
+function withGradleVersion(config) {
+  return withDangerousMod(config, [
+    'android',
+    (config) => {
+      const wrapperPath = path.join(
+        config.modRequest.platformProjectRoot,
+        'gradle/wrapper/gradle-wrapper.properties'
+      );
+      if (fs.existsSync(wrapperPath)) {
+        let content = fs.readFileSync(wrapperPath, 'utf8');
+        content = content.replace(
+          /distributionUrl=.*/,
+          'distributionUrl=https\\://services.gradle.org/distributions/gradle-8.10.2-bin.zip'
+        );
+        fs.writeFileSync(wrapperPath, content);
+      }
+      return config;
+    },
+  ]);
+}
+
 module.exports = function withStudyRoomWidget(config) {
   config = withWidgetManifest(config);
   config = withWidgetXml(config);
+  config = withGradleVersion(config);
   return config;
 };
