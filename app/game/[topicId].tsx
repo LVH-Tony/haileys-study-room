@@ -6,6 +6,8 @@ import {
   ActivityIndicator,
   Alert,
   ScrollView,
+  Modal,
+  Pressable,
 } from 'react-native';
 import { useEffect, useState, useRef } from 'react';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -22,14 +24,60 @@ const ROUND_SIZE = 5;
 
 interface GameQuestion {
   targetWord: Word;
-  options: string[];       // for word modes
-  imageOptions: Word[];    // for picture_quiz
+  options: string[];
+  imageOptions: Word[];
 }
 
+// ─── Floating Feedback Button + Sheet ───────────────────────────────────────
+function FeedbackSheet({
+  visible,
+  onClose,
+  onRate,
+  submitted,
+  wordLabel,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  onRate: (r: 'up' | 'down') => void;
+  submitted: boolean;
+  wordLabel: string;
+}) {
+  return (
+    <Modal transparent animationType="slide" visible={visible} onRequestClose={onClose}>
+      <Pressable style={sheet.backdrop} onPress={onClose} />
+      <View style={sheet.container}>
+        <View style={sheet.handle} />
+        {submitted ? (
+          <View style={sheet.thanks}>
+            <Text style={sheet.thanksEmoji}>✓</Text>
+            <Text style={sheet.thanksText}>Thanks for your feedback!</Text>
+          </View>
+        ) : (
+          <>
+            <Text style={sheet.title}>Was this a good question?</Text>
+            {wordLabel ? <Text style={sheet.wordChip}>"{wordLabel}"</Text> : null}
+            <View style={sheet.rateRow}>
+              <TouchableOpacity style={[sheet.rateBtn, sheet.upBtn]} onPress={() => onRate('up')}>
+                <Text style={sheet.rateEmoji}>👍</Text>
+                <Text style={sheet.rateBtnLabel}>Looks good</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[sheet.rateBtn, sheet.downBtn]} onPress={() => onRate('down')}>
+                <Text style={sheet.rateEmoji}>👎</Text>
+                <Text style={sheet.rateBtnLabel}>Something's off</Text>
+              </TouchableOpacity>
+            </View>
+          </>
+        )}
+      </View>
+    </Modal>
+  );
+}
+
+// ─── Main Screen ─────────────────────────────────────────────────────────────
 export default function GameScreen() {
   const { topicId, mode } = useLocalSearchParams<{ topicId: string; mode: GameMode }>();
   const router = useRouter();
-  const { session, profile } = useAuthStore();
+  const { session } = useAuthStore();
 
   const [questions, setQuestions] = useState<GameQuestion[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -37,6 +85,13 @@ export default function GameScreen() {
   const [score, setScore] = useState(0);
   const [loading, setLoading] = useState(true);
   const [done, setDone] = useState(false);
+
+  // Feedback sheet state
+  const [feedbackVisible, setFeedbackVisible] = useState(false);
+  const [feedbackSubmitted, setFeedbackSubmitted] = useState(false);
+  // Track which question index feedback was last submitted for (avoid double-submit)
+  const [feedbackForIndex, setFeedbackForIndex] = useState<number | null>(null);
+
   const soundRef = useRef<Audio.Sound | null>(null);
 
   useEffect(() => {
@@ -45,19 +100,12 @@ export default function GameScreen() {
   }, []);
 
   async function buildQuestions() {
-    // Fetch topic words
     const { data: topicWords } = await supabase
-      .from('words')
-      .select('*')
-      .eq('topic_id', topicId)
-      .order('difficulty_score');
+      .from('words').select('*').eq('topic_id', topicId).order('difficulty_score');
 
-    // Fetch all words for distractor pool
     const { data: allWords } = await supabase
-      .from('words')
-      .select('id, word, image_url, topic_id, difficulty_score, audio_url')
-      .neq('topic_id', topicId)
-      .limit(60);
+      .from('words').select('id, word, image_url, topic_id, difficulty_score, audio_url')
+      .neq('topic_id', topicId).limit(60);
 
     if (!topicWords || topicWords.length < ROUND_SIZE) {
       Alert.alert('Not enough words', 'This topic needs at least 5 words to play.');
@@ -65,38 +113,24 @@ export default function GameScreen() {
       return;
     }
 
-    // Prioritise words user has struggled with (spaced repetition)
     const sorted = [...topicWords].sort(() => Math.random() - 0.5).slice(0, ROUND_SIZE);
     const distractorPool: Word[] = (allWords ?? []) as Word[];
 
     const built: GameQuestion[] = sorted.map((word) => {
       const otherTopicWords = topicWords.filter((w) => w.id !== word.id);
-      const distractors = [
-        ...otherTopicWords,
-        ...distractorPool,
-      ]
+      const distractors = [...otherTopicWords, ...distractorPool]
         .filter((w) => w.word !== word.word)
-        .sort(() => Math.random() - 0.5)
-        .slice(0, 3);
+        .sort(() => Math.random() - 0.5).slice(0, 3);
 
       const options = [word.word, ...distractors.map((d) => d.word)].sort(() => Math.random() - 0.5);
-
-      const imageOptions = [word as Word, ...distractors.slice(0, 3) as Word[]].sort(
-        () => Math.random() - 0.5
-      );
-
+      const imageOptions = [word as Word, ...distractors.slice(0, 3) as Word[]].sort(() => Math.random() - 0.5);
       return { targetWord: word as Word, options, imageOptions };
     });
 
     setQuestions(built);
     setLoading(false);
 
-    // Auto-play word for listen_pick mode
-    if (mode === 'listen_pick' && built.length > 0) {
-      await playWordAudio(built[0].targetWord);
-    }
-    // Auto-play for picture_quiz too
-    if (mode === 'picture_quiz' && built.length > 0) {
+    if ((mode === 'listen_pick' || mode === 'picture_quiz') && built.length > 0) {
       await playWordAudio(built[0].targetWord);
     }
   }
@@ -109,7 +143,6 @@ export default function GameScreen() {
         soundRef.current = sound;
         await sound.playAsync();
       } else {
-        // Generate TTS on-the-fly
         const { data } = await supabase.functions.invoke('tts', { body: { text: word.word } });
         if (data?.audioUrl) {
           const { sound } = await Audio.Sound.createAsync({ uri: data.audioUrl });
@@ -117,9 +150,7 @@ export default function GameScreen() {
           await sound.playAsync();
         }
       }
-    } catch {
-      // Non-fatal
-    }
+    } catch { /* non-fatal */ }
   }
 
   async function handleSelect(answer: string) {
@@ -130,34 +161,32 @@ export default function GameScreen() {
     const isCorrect = answer === current.targetWord.word;
     if (isCorrect) setScore((s) => s + 1);
 
-    // Update spaced repetition stats
-    if (session) {
-      await updateWordStat(current.targetWord.id, isCorrect);
-    }
+    if (session) await updateWordStat(current.targetWord.id, isCorrect);
+    // No auto-advance — user taps "Next" to continue
+  }
 
-    setTimeout(async () => {
-      if (currentIndex + 1 < questions.length) {
-        setCurrentIndex((i) => i + 1);
-        setSelected(null);
-        const next = questions[currentIndex + 1];
-        if (mode === 'listen_pick' || mode === 'picture_quiz') {
-          await playWordAudio(next.targetWord);
-        }
-      } else {
-        await saveSession(isCorrect ? score + 1 : score);
-        setDone(true);
+  async function handleNext() {
+    const isLast = currentIndex + 1 >= questions.length;
+    const finalScore = score; // already updated by handleSelect
+
+    if (isLast) {
+      await saveSession(finalScore);
+      setDone(true);
+    } else {
+      setCurrentIndex((i) => i + 1);
+      setSelected(null);
+      setFeedbackSubmitted(false);
+      const next = questions[currentIndex + 1];
+      if (mode === 'listen_pick' || mode === 'picture_quiz') {
+        await playWordAudio(next.targetWord);
       }
-    }, 900);
+    }
   }
 
   async function updateWordStat(wordId: string, correct: boolean) {
     if (!session) return;
-    const { data: existing } = await supabase
-      .from('user_word_stats')
-      .select('*')
-      .eq('user_id', session.user.id)
-      .eq('word_id', wordId)
-      .single();
+    const { data: existing } = await supabase.from('user_word_stats').select('*')
+      .eq('user_id', session.user.id).eq('word_id', wordId).single();
 
     const interval = nextInterval(existing?.interval_days ?? 1, correct);
     const reviewAt = nextReviewDate(interval);
@@ -166,19 +195,13 @@ export default function GameScreen() {
       await supabase.from('user_word_stats').update({
         correct_count: existing.correct_count + (correct ? 1 : 0),
         wrong_count: existing.wrong_count + (correct ? 0 : 1),
-        interval_days: interval,
-        next_review_at: reviewAt,
-        updated_at: new Date().toISOString(),
+        interval_days: interval, next_review_at: reviewAt, updated_at: new Date().toISOString(),
       }).eq('id', existing.id);
     } else {
       await supabase.from('user_word_stats').insert({
-        user_id: session.user.id,
-        word_id: wordId,
-        correct_count: correct ? 1 : 0,
-        wrong_count: correct ? 0 : 1,
-        interval_days: interval,
-        next_review_at: reviewAt,
-        updated_at: new Date().toISOString(),
+        user_id: session.user.id, word_id: wordId,
+        correct_count: correct ? 1 : 0, wrong_count: correct ? 0 : 1,
+        interval_days: interval, next_review_at: reviewAt, updated_at: new Date().toISOString(),
       });
     }
   }
@@ -186,30 +209,37 @@ export default function GameScreen() {
   async function saveSession(finalScore: number) {
     if (!session || !topicId) return;
     await supabase.from('lesson_history').insert({
-      user_id: session.user.id,
-      topic_id: topicId,
-      mode: mode as GameMode,
-      score: finalScore,
-      total_questions: ROUND_SIZE,
-      completed_at: new Date().toISOString(),
+      user_id: session.user.id, topic_id: topicId, mode: mode as GameMode,
+      score: finalScore, total_questions: ROUND_SIZE, completed_at: new Date().toISOString(),
     });
-    // Award XP (10 per correct answer)
-    const xpGain = finalScore * 10;
-    await supabase.rpc('increment_xp', { p_user_id: session.user.id, p_amount: xpGain });
+    await supabase.rpc('increment_xp', { p_user_id: session.user.id, p_amount: finalScore * 10 });
   }
 
-  async function submitFeedback(rating: 'up' | 'down') {
+  function openFeedback() {
+    setFeedbackSubmitted(false);
+    setFeedbackVisible(true);
+  }
+
+  async function handleRate(rating: 'up' | 'down') {
     if (!session) return;
-    const wordId = questions[currentIndex]?.targetWord.id;
-    if (!wordId) return;
+    // On results screen feedback on the whole session (use last question's word as ref)
+    const refIndex = done ? questions.length - 1 : currentIndex;
+    const wordId = questions[refIndex]?.targetWord.id;
+    if (!wordId || feedbackForIndex === refIndex) {
+      // Already submitted for this question — just close
+      setFeedbackSubmitted(true);
+      setTimeout(() => setFeedbackVisible(false), 1200);
+      return;
+    }
     await supabase.from('feedback').insert({
-      user_id: session.user.id,
-      ref_type: 'word',
-      ref_id: wordId,
-      rating,
+      user_id: session.user.id, ref_type: 'word', ref_id: wordId, rating,
     });
+    setFeedbackForIndex(refIndex);
+    setFeedbackSubmitted(true);
+    setTimeout(() => setFeedbackVisible(false), 1200);
   }
 
+  // ── Loading ──────────────────────────────────────────────────────────────
   if (loading) {
     return (
       <View style={styles.center}>
@@ -218,39 +248,52 @@ export default function GameScreen() {
     );
   }
 
-  // Results screen
+  // ── Results screen ───────────────────────────────────────────────────────
   if (done) {
     const pct = Math.round((score / ROUND_SIZE) * 100);
     return (
-      <View style={styles.center}>
-        <Text style={styles.resultEmoji}>{pct >= 80 ? '🎉' : pct >= 50 ? '👍' : '💪'}</Text>
-        <Text style={styles.resultTitle}>{score} / {ROUND_SIZE} correct</Text>
-        <Text style={styles.resultSub}>
-          {pct >= 80 ? 'Excellent work!' : pct >= 50 ? 'Good effort!' : 'Keep practicing!'}
-        </Text>
-        <Text style={styles.xpEarned}>+{score * 10} XP earned</Text>
-        <TouchableOpacity style={styles.button} onPress={() => router.back()}>
-          <Text style={styles.buttonText}>Back to Topics</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.button, { backgroundColor: Colors.surface, borderWidth: 1.5, borderColor: Colors.border }]}
-          onPress={() => {
-            setCurrentIndex(0);
-            setScore(0);
-            setSelected(null);
-            setDone(false);
-            setLoading(true);
-            buildQuestions();
-          }}
-        >
-          <Text style={[styles.buttonText, { color: Colors.text }]}>Play again</Text>
-        </TouchableOpacity>
+      <View style={styles.container}>
+        <View style={styles.center}>
+          <Text style={styles.resultEmoji}>{pct >= 80 ? '🎉' : pct >= 50 ? '👍' : '💪'}</Text>
+          <Text style={styles.resultTitle}>{score} / {ROUND_SIZE} correct</Text>
+          <Text style={styles.resultSub}>
+            {pct >= 80 ? 'Excellent work!' : pct >= 50 ? 'Good effort!' : 'Keep practicing!'}
+          </Text>
+          <Text style={styles.xpEarned}>+{score * 10} XP earned</Text>
+          <TouchableOpacity style={styles.button} onPress={() => router.back()}>
+            <Text style={styles.buttonText}>Back to Topics</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.button, styles.outlineButton]}
+            onPress={() => {
+              setCurrentIndex(0); setScore(0); setSelected(null);
+              setDone(false); setFeedbackSubmitted(false); setFeedbackForIndex(null);
+              setLoading(true); buildQuestions();
+            }}
+          >
+            <Text style={[styles.buttonText, { color: Colors.text }]}>Play again</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Floating feedback button — available on results too */}
+        <FloatingFeedbackButton onPress={openFeedback} />
+        <FeedbackSheet
+          visible={feedbackVisible}
+          onClose={() => setFeedbackVisible(false)}
+          onRate={handleRate}
+          submitted={feedbackSubmitted}
+          wordLabel={questions[questions.length - 1]?.targetWord.word ?? ''}
+        />
       </View>
     );
   }
 
+  // ── Game screen ──────────────────────────────────────────────────────────
   const current = questions[currentIndex];
+  const isLastQuestion = currentIndex + 1 >= questions.length;
   const progress = (currentIndex / ROUND_SIZE) * 100;
+  const isAnswered = !!selected;
+  const isCorrect = selected === current.targetWord.word;
 
   return (
     <View style={styles.container}>
@@ -269,7 +312,7 @@ export default function GameScreen() {
       </View>
 
       <ScrollView contentContainerStyle={styles.content}>
-        {/* Mode: picture_quiz — show 5 images, user picks one */}
+        {/* ── Picture Quiz ── */}
         {mode === 'picture_quiz' && (
           <>
             <Text style={styles.instruction}>Which picture matches the word?</Text>
@@ -279,26 +322,25 @@ export default function GameScreen() {
             </TouchableOpacity>
             <View style={styles.imageGrid}>
               {current.imageOptions.map((opt) => {
-                const isSelected = selected === opt.word;
-                const isCorrect = opt.word === current.targetWord.word;
+                const isOpt = selected === opt.word;
+                const isOptCorrect = opt.word === current.targetWord.word;
                 let borderColor = Colors.border;
-                if (isSelected && isCorrect) borderColor = Colors.success;
-                if (isSelected && !isCorrect) borderColor = Colors.error;
-                if (selected && !isSelected && isCorrect) borderColor = Colors.success;
+                if (isOpt && isOptCorrect) borderColor = Colors.success;
+                if (isOpt && !isOptCorrect) borderColor = Colors.error;
+                if (isAnswered && !isOpt && isOptCorrect) borderColor = Colors.success;
                 return (
                   <TouchableOpacity
                     key={opt.id}
                     style={[styles.imageOption, { borderColor }]}
                     onPress={() => handleSelect(opt.word)}
-                    disabled={!!selected}
+                    disabled={isAnswered}
                   >
-                    {opt.image_url ? (
-                      <Image source={{ uri: opt.image_url }} style={styles.optionImage} contentFit="cover" />
-                    ) : (
-                      <View style={[styles.optionImage, styles.imagePlaceholder]}>
-                        <Text style={styles.placeholderText}>{opt.word}</Text>
-                      </View>
-                    )}
+                    {opt.image_url
+                      ? <Image source={{ uri: opt.image_url }} style={styles.optionImage} contentFit="cover" />
+                      : <View style={[styles.optionImage, styles.imagePlaceholder]}>
+                          <Text style={styles.placeholderText}>{opt.word}</Text>
+                        </View>
+                    }
                   </TouchableOpacity>
                 );
               })}
@@ -306,42 +348,24 @@ export default function GameScreen() {
           </>
         )}
 
-        {/* Mode: word_quiz — show 1 image, pick word */}
+        {/* ── Word Quiz ── */}
         {mode === 'word_quiz' && (
           <>
             <Text style={styles.instruction}>What word matches this picture?</Text>
-            {current.targetWord.image_url ? (
-              <Image source={{ uri: current.targetWord.image_url }} style={styles.mainImage} contentFit="cover" />
-            ) : (
-              <View style={[styles.mainImage, styles.imagePlaceholder]}>
-                <Text style={styles.placeholderText}>{current.targetWord.word}</Text>
-              </View>
-            )}
-            <View style={styles.wordOptions}>
-              {current.options.map((opt) => {
-                const isSelected = selected === opt;
-                const isCorrect = opt === current.targetWord.word;
-                let bg = Colors.surface;
-                let border = Colors.border;
-                if (isSelected && isCorrect) { bg = Colors.successLight; border = Colors.success; }
-                if (isSelected && !isCorrect) { bg = Colors.errorLight; border = Colors.error; }
-                if (selected && !isSelected && isCorrect) { bg = Colors.successLight; border = Colors.success; }
-                return (
-                  <TouchableOpacity
-                    key={opt}
-                    style={[styles.wordOption, { backgroundColor: bg, borderColor: border }]}
-                    onPress={() => handleSelect(opt)}
-                    disabled={!!selected}
-                  >
-                    <Text style={styles.wordOptionText}>{opt}</Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
+            {current.targetWord.image_url
+              ? <Image source={{ uri: current.targetWord.image_url }} style={styles.mainImage} contentFit="cover" />
+              : <View style={[styles.mainImage, styles.imagePlaceholder]}>
+                  <Text style={styles.placeholderText}>{current.targetWord.word}</Text>
+                </View>
+            }
+            <WordOptions
+              options={current.options} selected={selected}
+              correct={current.targetWord.word} onSelect={handleSelect} disabled={isAnswered}
+            />
           </>
         )}
 
-        {/* Mode: listen_pick — hear word, pick it */}
+        {/* ── Listen & Pick ── */}
         {mode === 'listen_pick' && (
           <>
             <Text style={styles.instruction}>Listen and pick the correct word</Text>
@@ -349,58 +373,103 @@ export default function GameScreen() {
               <Text style={styles.listenEmoji}>🔊</Text>
               <Text style={styles.listenLabel}>Tap to hear again</Text>
             </TouchableOpacity>
-            <View style={styles.wordOptions}>
-              {current.options.map((opt) => {
-                const isSelected = selected === opt;
-                const isCorrect = opt === current.targetWord.word;
-                let bg = Colors.surface;
-                let border = Colors.border;
-                if (isSelected && isCorrect) { bg = Colors.successLight; border = Colors.success; }
-                if (isSelected && !isCorrect) { bg = Colors.errorLight; border = Colors.error; }
-                if (selected && !isSelected && isCorrect) { bg = Colors.successLight; border = Colors.success; }
-                return (
-                  <TouchableOpacity
-                    key={opt}
-                    style={[styles.wordOption, { backgroundColor: bg, borderColor: border }]}
-                    onPress={() => handleSelect(opt)}
-                    disabled={!!selected}
-                  >
-                    <Text style={styles.wordOptionText}>{opt}</Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
+            <WordOptions
+              options={current.options} selected={selected}
+              correct={current.targetWord.word} onSelect={handleSelect} disabled={isAnswered}
+            />
           </>
         )}
 
-        {/* Feedback buttons */}
-        <View style={styles.feedbackRow}>
-          <Text style={styles.feedbackLabel}>Was this question good?</Text>
-          <TouchableOpacity onPress={() => submitFeedback('up')}><Text style={styles.fbBtn}>👍</Text></TouchableOpacity>
-          <TouchableOpacity onPress={() => submitFeedback('down')}><Text style={styles.fbBtn}>👎</Text></TouchableOpacity>
-        </View>
+        {/* ── Result banner + Next button ── */}
+        {isAnswered && (
+          <View style={[styles.resultBanner, isCorrect ? styles.correctBanner : styles.wrongBanner]}>
+            <Text style={styles.resultBannerEmoji}>{isCorrect ? '✓' : '✗'}</Text>
+            <View style={styles.resultBannerText}>
+              <Text style={[styles.resultBannerTitle, { color: isCorrect ? Colors.success : Colors.error }]}>
+                {isCorrect ? 'Correct!' : 'Not quite'}
+              </Text>
+              {!isCorrect && (
+                <Text style={styles.resultBannerSub}>
+                  Answer: <Text style={{ fontWeight: FontWeight.bold }}>{current.targetWord.word}</Text>
+                </Text>
+              )}
+            </View>
+            <TouchableOpacity style={styles.nextBtn} onPress={handleNext}>
+              <Text style={styles.nextBtnText}>{isLastQuestion ? 'Finish' : 'Next →'}</Text>
+            </TouchableOpacity>
+          </View>
+        )}
       </ScrollView>
+
+      {/* Floating feedback button — always visible */}
+      <FloatingFeedbackButton onPress={openFeedback} />
+
+      <FeedbackSheet
+        visible={feedbackVisible}
+        onClose={() => setFeedbackVisible(false)}
+        onRate={handleRate}
+        submitted={feedbackSubmitted}
+        wordLabel={current.targetWord.word}
+      />
     </View>
   );
 }
 
+// ── Shared word options component ────────────────────────────────────────────
+function WordOptions({
+  options, selected, correct, onSelect, disabled,
+}: {
+  options: string[]; selected: string | null; correct: string;
+  onSelect: (o: string) => void; disabled: boolean;
+}) {
+  return (
+    <View style={styles.wordOptions}>
+      {options.map((opt) => {
+        const isSelected = selected === opt;
+        const isCorrect = opt === correct;
+        let bg = Colors.surface;
+        let border = Colors.border;
+        if (isSelected && isCorrect) { bg = Colors.successLight; border = Colors.success; }
+        if (isSelected && !isCorrect) { bg = Colors.errorLight; border = Colors.error; }
+        if (disabled && !isSelected && isCorrect) { bg = Colors.successLight; border = Colors.success; }
+        return (
+          <TouchableOpacity
+            key={opt}
+            style={[styles.wordOption, { backgroundColor: bg, borderColor: border }]}
+            onPress={() => onSelect(opt)}
+            disabled={disabled}
+          >
+            <Text style={styles.wordOptionText}>{opt}</Text>
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+}
+
+// ── Floating button ───────────────────────────────────────────────────────────
+function FloatingFeedbackButton({ onPress }: { onPress: () => void }) {
+  return (
+    <TouchableOpacity style={fab.btn} onPress={onPress} activeOpacity={0.8}>
+      <Text style={fab.icon}>⚑</Text>
+    </TouchableOpacity>
+  );
+}
+
+// ── Styles ────────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
   center: { flex: 1, backgroundColor: Colors.background, justifyContent: 'center', alignItems: 'center', gap: 16, padding: 24 },
   header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 24,
-    paddingTop: 60,
-    paddingBottom: 12,
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingHorizontal: 24, paddingTop: 60, paddingBottom: 12,
   },
   back: { fontSize: FontSize.base, color: Colors.primary, fontWeight: FontWeight.semibold },
   counter: { fontSize: FontSize.base, color: Colors.textSecondary, fontWeight: FontWeight.medium },
   scoreText: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.primaryDark },
   progressBar: { height: 8, backgroundColor: Colors.border, marginHorizontal: 24, borderRadius: 4, overflow: 'hidden', marginBottom: 4 },
   progressFill: { height: '100%', backgroundColor: Colors.primary, borderRadius: 4 },
-  content: { padding: 24, gap: 20 },
+  content: { padding: 24, paddingBottom: 120, gap: 20 },
   instruction: { fontSize: FontSize.md, color: Colors.textSecondary, textAlign: 'center' },
   wordSpeakRow: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 10 },
   wordDisplay: { fontSize: FontSize['2xl'], fontWeight: FontWeight.extrabold, color: Colors.text, textAlign: 'center' },
@@ -415,29 +484,106 @@ const styles = StyleSheet.create({
   wordOption: { borderWidth: 2, borderRadius: 14, paddingVertical: 16, paddingHorizontal: 20, alignItems: 'center' },
   wordOptionText: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.text },
   listenBtn: {
-    backgroundColor: Colors.primary,
-    borderRadius: 60,
-    paddingVertical: 24,
-    alignItems: 'center',
-    gap: 6,
-    marginHorizontal: 40,
+    backgroundColor: Colors.primary, borderRadius: 60, paddingVertical: 24,
+    alignItems: 'center', gap: 6, marginHorizontal: 40,
   },
   listenEmoji: { fontSize: 40 },
   listenLabel: { fontSize: FontSize.base, color: Colors.white, fontWeight: FontWeight.semibold },
-  feedbackRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 12, marginTop: 4 },
-  feedbackLabel: { fontSize: FontSize.sm, color: Colors.textMuted },
-  fbBtn: { fontSize: 22 },
+
+  // Result banner
+  resultBanner: {
+    flexDirection: 'row', alignItems: 'center', borderRadius: 18,
+    padding: 16, gap: 12, borderWidth: 1.5,
+  },
+  correctBanner: { backgroundColor: Colors.successLight + 'AA', borderColor: Colors.success },
+  wrongBanner: { backgroundColor: Colors.errorLight + 'AA', borderColor: Colors.error },
+  resultBannerEmoji: { fontSize: 28 },
+  resultBannerText: { flex: 1, gap: 2 },
+  resultBannerTitle: { fontSize: FontSize.md, fontWeight: FontWeight.bold },
+  resultBannerSub: { fontSize: FontSize.sm, color: Colors.textSecondary },
+  nextBtn: {
+    backgroundColor: Colors.primary, borderRadius: 12,
+    paddingVertical: 10, paddingHorizontal: 16,
+  },
+  nextBtnText: { color: Colors.white, fontWeight: FontWeight.bold, fontSize: FontSize.sm },
+
+  // Results screen
   resultEmoji: { fontSize: 60 },
   resultTitle: { fontSize: FontSize['2xl'], fontWeight: FontWeight.extrabold, color: Colors.text },
   resultSub: { fontSize: FontSize.md, color: Colors.textSecondary },
   xpEarned: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.xp },
   button: {
-    backgroundColor: Colors.primary,
-    borderRadius: 14,
-    paddingVertical: 14,
-    paddingHorizontal: 32,
-    alignItems: 'center',
-    width: '80%',
+    backgroundColor: Colors.primary, borderRadius: 14, paddingVertical: 14,
+    paddingHorizontal: 32, alignItems: 'center', width: '80%',
   },
+  outlineButton: { backgroundColor: Colors.surface, borderWidth: 1.5, borderColor: Colors.border },
   buttonText: { color: Colors.white, fontWeight: FontWeight.bold, fontSize: FontSize.md },
+});
+
+const fab = StyleSheet.create({
+  btn: {
+    position: 'absolute',
+    bottom: 32,
+    right: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: Colors.surfaceAlt,
+    borderWidth: 1.5,
+    borderColor: Colors.border,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: Colors.black,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  icon: { fontSize: 18, color: Colors.textSecondary },
+});
+
+const sheet = StyleSheet.create({
+  backdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+  },
+  container: {
+    backgroundColor: Colors.surface,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 28,
+    paddingBottom: 48,
+    gap: 20,
+  },
+  handle: {
+    width: 40, height: 4, borderRadius: 2,
+    backgroundColor: Colors.border,
+    alignSelf: 'center',
+    marginBottom: 4,
+  },
+  title: {
+    fontSize: FontSize.lg, fontWeight: FontWeight.bold,
+    color: Colors.text, textAlign: 'center',
+  },
+  wordChip: {
+    alignSelf: 'center',
+    backgroundColor: Colors.background,
+    borderRadius: 20,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    fontSize: FontSize.base,
+    color: Colors.textSecondary,
+  },
+  rateRow: { flexDirection: 'row', gap: 14 },
+  rateBtn: {
+    flex: 1, borderRadius: 16, paddingVertical: 18,
+    alignItems: 'center', gap: 8, borderWidth: 1.5,
+  },
+  upBtn: { backgroundColor: Colors.successLight + '55', borderColor: Colors.success },
+  downBtn: { backgroundColor: Colors.errorLight + '55', borderColor: Colors.error },
+  rateEmoji: { fontSize: 30 },
+  rateBtnLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.text },
+  thanks: { alignItems: 'center', gap: 12, paddingVertical: 12 },
+  thanksEmoji: { fontSize: 40, color: Colors.success },
+  thanksText: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.textSecondary },
 });
