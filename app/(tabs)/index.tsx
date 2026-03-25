@@ -10,17 +10,44 @@ import { useEffect } from 'react';
 import { useRouter } from 'expo-router';
 import { useAuthStore } from '@/store/auth.store';
 import { useProgressStore } from '@/store/progress.store';
+import { useSettingsStore } from '@/store/settings.store';
+import { WotdCard } from '@/components/WotdCard';
+import { setupAndroidChannels, scheduleStudyReminders, scheduleWotdNotification } from '@/lib/notifications';
 import { Colors } from '@/constants/colors';
 import { FontSize, FontWeight } from '@/constants/typography';
 
 export default function HomeScreen() {
   const { profile, signOut } = useAuthStore();
   const { aiSuggestion, fetchAiSuggestion, dismissSuggestion } = useProgressStore();
+  const { settings, wotd, loading: wotdLoading, fetchSettings, fetchWotd, markWotdSeen } = useSettingsStore();
   const router = useRouter();
 
   useEffect(() => {
-    if (profile?.id) fetchAiSuggestion(profile.id);
+    if (!profile?.id) return;
+    fetchAiSuggestion(profile.id);
+    fetchSettings(profile.id);
+    fetchWotd(profile.id);
+    // Boot notification channels and schedule if settings loaded
+    setupAndroidChannels();
   }, [profile?.id]);
+
+  // Re-apply notification schedule whenever settings change
+  useEffect(() => {
+    if (!settings) return;
+    if (settings.reminder_enabled) {
+      scheduleStudyReminders({
+        enabled: true,
+        mode: settings.reminder_mode,
+        window: settings.reminder_window,
+        specificTime: settings.reminder_time,
+        repeatCount: settings.reminder_repeat_count,
+        repeatGapMinutes: settings.reminder_repeat_gap,
+      });
+    }
+    if (settings.wotd_enabled && wotd?.words?.word) {
+      scheduleWotdNotification(wotd.words.word, 7, 0);
+    }
+  }, [settings?.reminder_enabled, settings?.reminder_mode]);
 
   if (!profile) {
     return (
@@ -51,6 +78,11 @@ export default function HomeScreen() {
           <Text style={styles.streakSub}>Keep it up — practice every day!</Text>
         </View>
       </View>
+
+      {/* Word of the Day */}
+      {settings?.wotd_enabled && (
+        <WotdCard wotd={wotd} loading={wotdLoading} onMarkSeen={markWotdSeen} />
+      )}
 
       {/* AI Suggestion */}
       {aiSuggestion && (

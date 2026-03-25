@@ -35,6 +35,15 @@
         {
           "microphonePermission": "Allow Hailey's Study Room to access your microphone for speaking practice."
         }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#E07B39",
+          "defaultChannel": "study-reminders",
+          "sounds": []
+        }
       ]
     ],
     "experiments": {
