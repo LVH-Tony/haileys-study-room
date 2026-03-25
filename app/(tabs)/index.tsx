@@ -13,6 +13,7 @@ import { useProgressStore } from '@/store/progress.store';
 import { useSettingsStore } from '@/store/settings.store';
 import { WotdCard } from '@/components/WotdCard';
 import { setupAndroidChannels, scheduleStudyReminders, scheduleWotdNotification } from '@/lib/notifications';
+import { updateWidget } from '@/widgets/widgetTaskHandler';
 import { Colors } from '@/constants/colors';
 import { FontSize, FontWeight } from '@/constants/typography';
 
@@ -46,6 +47,7 @@ export default function HomeScreen() {
     }
     if (settings.wotd_enabled && wotd?.words?.word) {
       scheduleWotdNotification(wotd.words.word, 7, 0);
+      updateWidget(); // push fresh data to home screen widget
     }
   }, [settings?.reminder_enabled, settings?.reminder_mode]);
 
