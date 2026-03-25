@@ -85,7 +85,7 @@ function withGradleVersion(config) {
         let content = fs.readFileSync(wrapperPath, 'utf8');
         content = content.replace(
           /distributionUrl=.*/,
-          'distributionUrl=https\\://services.gradle.org/distributions/gradle-8.10.2-bin.zip'
+          'distributionUrl=https\\://services.gradle.org/distributions/gradle-8.13-bin.zip'
         );
         fs.writeFileSync(wrapperPath, content);
       }
