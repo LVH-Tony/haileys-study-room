@@ -56,19 +56,23 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   loading: false,
 
   fetchSettings: async (userId: string) => {
-    const { data } = await supabase
-      .from('user_settings')
-      .select('*')
-      .eq('user_id', userId)
-      .single();
+    try {
+      const { data } = await supabase
+        .from('user_settings')
+        .select('*')
+        .eq('user_id', userId)
+        .maybeSingle();
 
-    if (!data) {
-      // Auto-create default settings if trigger missed it
-      const defaults = { user_id: userId, ...DEFAULT_SETTINGS };
-      await supabase.from('user_settings').insert(defaults);
-      set({ settings: defaults });
-    } else {
-      set({ settings: data });
+      if (!data) {
+        // Auto-create default settings if trigger missed it
+        const defaults = { user_id: userId, ...DEFAULT_SETTINGS };
+        await supabase.from('user_settings').insert(defaults);
+        set({ settings: defaults });
+      } else {
+        set({ settings: data });
+      }
+    } catch (e) {
+      console.warn('[settings] fetchSettings error:', e);
     }
   },
 
@@ -84,10 +88,27 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   fetchWotd: async (userId: string) => {
     set({ loading: true });
-    const { data } = await supabase.functions.invoke('word-of-the-day', {
-      body: { userId },
-    });
-    set({ wotd: data?.wotd ?? null, loading: false });
+    try {
+      // Get the current session token to pass to the edge function
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData?.session?.access_token;
+      if (!token) {
+        set({ wotd: null, loading: false });
+        return;
+      }
+      const { data, error } = await supabase.functions.invoke('word-of-the-day', {
+        body: { userId },
+      });
+      if (error) {
+        console.warn('[wotd] edge function error:', error.message);
+        set({ wotd: null, loading: false });
+        return;
+      }
+      set({ wotd: data?.wotd ?? null, loading: false });
+    } catch (e) {
+      console.warn('[wotd] fetchWotd error:', e);
+      set({ wotd: null, loading: false });
+    }
   },
 
   markWotdSeen: async (wotdId: string) => {

@@ -87,15 +87,19 @@ export const useProgressStore = create<ProgressState>((set) => ({
   },
 
   fetchAiSuggestion: async (userId: string) => {
-    const { data } = await supabase
-      .from('ai_suggestions')
-      .select('*')
-      .eq('user_id', userId)
-      .eq('dismissed', false)
-      .order('generated_at', { ascending: false })
-      .limit(1)
-      .single();
-    set({ aiSuggestion: data ?? null });
+    try {
+      const { data } = await supabase
+        .from('ai_suggestions')
+        .select('*')
+        .eq('user_id', userId)
+        .eq('dismissed', false)
+        .order('generated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle(); // .single() throws 406 when 0 rows; .maybeSingle() returns null
+      set({ aiSuggestion: data ?? null });
+    } catch {
+      set({ aiSuggestion: null });
+    }
   },
 
   dismissSuggestion: async (id: string) => {
