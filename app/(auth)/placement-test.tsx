@@ -310,9 +310,9 @@ export default function PlacementTestScreen() {
     setSubmitting(true);
     try {
       if (session?.user.id) {
-        await supabase
+        await (supabase as any)
           .from('user_profiles')
-          .update({ starting_level: 'beginner', convo_level: 1 })
+          .update({ starting_level: 'beginner', convo_level: 1, placement_score: 0 })
           .eq('id', session.user.id);
         await fetchProfile(session.user.id);
       }
@@ -320,7 +320,6 @@ export default function PlacementTestScreen() {
       console.warn('skipTest error:', e);
     } finally {
       setSubmitting(false);
-      router.replace('/(tabs)/');
     }
   }
 
@@ -331,13 +330,9 @@ export default function PlacementTestScreen() {
 
     try {
       if (session?.user.id) {
-        await supabase
+        await (supabase as any)
           .from('user_profiles')
-          .update({
-            placement_score: finalScore,
-            starting_level: levelResult.tier,
-            convo_level: levelResult.convoLevel,
-          })
+          .update({ placement_score: finalScore, starting_level: levelResult.tier, convo_level: levelResult.convoLevel })
           .eq('id', session.user.id);
 
         await fetchProfile(session.user.id);
@@ -351,7 +346,7 @@ export default function PlacementTestScreen() {
   }
 
   function handleStartLearning() {
-    router.replace('/(tabs)/');
+    router.replace('/' as any);
   }
 
   // ── Intro screen ─────────────────────────────────────────────────────────────
@@ -531,8 +526,8 @@ export default function PlacementTestScreen() {
             {current.options.map((option) => {
               const isSelected = selected === option;
               const isCorrect  = option === current.correct;
-              let bg     = Colors.surface;
-              let border = Colors.border;
+              let bg: string     = Colors.surface;
+              let border: string = Colors.border;
               if (isSelected &&  isCorrect)  { bg = Colors.successLight; border = Colors.success; }
               if (isSelected && !isCorrect)  { bg = Colors.errorLight;   border = Colors.error; }
               if (isAnswered && !isSelected && isCorrect) { bg = Colors.successLight; border = Colors.success; }
