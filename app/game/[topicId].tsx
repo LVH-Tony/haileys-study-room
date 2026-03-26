@@ -23,6 +23,7 @@ import { FontSize, FontWeight } from '@/constants/typography';
 import { nextInterval, nextReviewDate } from '@/lib/spaced-repetition';
 import { playCorrect, playWrong, playComplete } from '@/lib/sounds';
 import { checkGameAchievements } from '@/lib/achievements';
+import { numberToWords, generateNumbers, numeralUri, parseNumeralUri, getColorPool, colorUri, parseColorUri } from '@/lib/number-utils';
 import type { Word, GameMode } from '@/lib/database.types';
 
 const ROUND_SIZE = 5;
@@ -31,6 +32,28 @@ interface GameQuestion {
   targetWord: Word;
   options: string[];
   imageOptions: Word[];
+}
+
+// ─── Numeral Display ──────────────────────────────────────────────────────────
+function NumeralDisplay({ value, style, small }: { value: number; style?: any; small?: boolean }) {
+  const numStr = value.toLocaleString();
+  const fontSize = small
+    ? (numStr.length <= 2 ? 44 : numStr.length <= 4 ? 32 : 22)
+    : (numStr.length <= 2 ? 80 : numStr.length <= 4 ? 56 : 40);
+  const bg = NUMERAL_COLORS[value % NUMERAL_COLORS.length];
+  return (
+    <View style={[style, { backgroundColor: bg, justifyContent: 'center', alignItems: 'center' }]}>
+      <Text style={{ fontSize, fontWeight: '900', color: '#fff', textShadowColor: 'rgba(0,0,0,0.15)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 4 }}>
+        {numStr}
+      </Text>
+    </View>
+  );
+}
+const NUMERAL_COLORS = ['#1976D2','#388E3C','#E64A19','#7B1FA2','#00796B','#F57C00','#C62828','#283593'];
+
+// ─── Color Swatch ─────────────────────────────────────────────────────────────
+function ColorSwatch({ hex, style }: { hex: string; style?: any }) {
+  return <View style={[style, { backgroundColor: hex }]} />;
 }
 
 // ─── Achievement Toast ────────────────────────────────────────────────────────
@@ -94,7 +117,7 @@ function FeedbackSheet({ visible, onClose, onRate, submitted, wordLabel }: {
 export default function GameScreen() {
   const { topicId, mode } = useLocalSearchParams<{ topicId: string; mode: GameMode }>();
   const router = useRouter();
-  const { session } = useAuthStore();
+  const { session, profile } = useAuthStore();
 
   const [questions, setQuestions]   = useState<GameQuestion[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -103,6 +126,7 @@ export default function GameScreen() {
   const [loading, setLoading]       = useState(true);
   const [done, setDone]             = useState(false);
   const [muted, setMuted]           = useState(false);
+  const [slowMode, setSlowMode]     = useState(false);
 
   // Definition card
   const [shownDef, setShownDef]     = useState<{ correct: Word; chosen: Word | null } | null>(null);
@@ -135,6 +159,64 @@ export default function GameScreen() {
   }, []);
 
   async function buildQuestions() {
+    // Check if this is the Numbers topic
+    const { data: topicData } = await supabase.from('topics').select('name').eq('id', topicId).single();
+    const isNumbers = topicData?.name === 'Numbers';
+
+    const userLevel = (profile?.starting_level ?? 'beginner') as import('@/lib/database.types').DifficultyTier;
+
+    if (isNumbers) {
+      // Dynamically generate random numbers for the user's level
+      const pool = generateNumbers(ROUND_SIZE * 6, userLevel); // big pool so distractors are varied
+      const targets = pool.slice(0, ROUND_SIZE);
+      const distractorPool = pool.slice(ROUND_SIZE);
+
+      const built: GameQuestion[] = targets.map((n, idx) => {
+        const word = numberToWords(n);
+        const distractorNums = distractorPool.slice(idx * 3, idx * 3 + 3);
+        const distractors = distractorNums.map((d) => numberToWords(d));
+        const options = [word, ...distractors].sort(() => Math.random() - 0.5);
+        const fakeWord: Word = { id: `num-${n}`, word, image_url: numeralUri(n), definition: `The number ${n}`, difficulty_score: 1, topic_id: topicId, audio_url: null } as any;
+        const fakeDistractors: Word[] = distractorNums.map((d) => ({
+          id: `num-${d}`, word: numberToWords(d), image_url: numeralUri(d), definition: `The number ${d}`, difficulty_score: 1, topic_id: topicId, audio_url: null,
+        } as any));
+        const imageOptions = [fakeWord, ...fakeDistractors].sort(() => Math.random() - 0.5);
+        return { targetWord: fakeWord, options, imageOptions };
+      });
+
+      setQuestions(built);
+      setLoading(false);
+      if (!muted && (mode === 'listen_pick' || mode === 'picture_quiz') && built.length > 0) {
+        await playWordAudio(built[0].targetWord);
+      }
+      return;
+    }
+
+    const isColors = topicData?.name === 'Colors';
+
+    if (isColors) {
+      const pool = [...getColorPool(userLevel)].sort(() => Math.random() - 0.5);
+      const targets = pool.slice(0, ROUND_SIZE);
+      const built: GameQuestion[] = targets.map((color, idx) => {
+        const others = pool.filter((_, i) => i !== pool.indexOf(color));
+        const distractors = others.sort(() => Math.random() - 0.5).slice(0, 3);
+        const options = [color.name, ...distractors.map((d) => d.name)].sort(() => Math.random() - 0.5);
+        const makeWord = (c: typeof color): Word => ({
+          id: `color-${c.name}`, word: c.name, image_url: colorUri(c.hex),
+          definition: c.definition, difficulty_score: 1, topic_id: topicId, audio_url: null,
+        } as any);
+        const imageOptions = [makeWord(color), ...distractors.map(makeWord)].sort(() => Math.random() - 0.5);
+        return { targetWord: makeWord(color), options, imageOptions };
+      });
+
+      setQuestions(built);
+      setLoading(false);
+      if (!muted && (mode === 'listen_pick' || mode === 'picture_quiz') && built.length > 0) {
+        await playWordAudio(built[0].targetWord);
+      }
+      return;
+    }
+
     const { data: topicWords } = await supabase
       .from('words').select('*').eq('topic_id', topicId).order('difficulty_score');
 
@@ -148,14 +230,31 @@ export default function GameScreen() {
       return;
     }
 
-    const sorted = [...topicWords].sort(() => Math.random() - 0.5).slice(0, ROUND_SIZE);
-    const distractorPool: Word[] = (allWords ?? []) as Word[];
+    // Pick words appropriate to the user's level — prefer lower difficulty_score for beginners
+    const maxScore: Record<string, number> = { beginner: 2, elementary: 3, 'pre-intermediate': 5, intermediate: 99 };
+    const cap = maxScore[userLevel] ?? 99;
+    const levelWords = topicWords.filter((w) => (w.difficulty_score ?? 1) <= cap);
+    const pool2 = levelWords.length >= ROUND_SIZE ? levelWords : topicWords;
+    const sorted = [...pool2].sort(() => Math.random() - 0.5).slice(0, ROUND_SIZE);
+    const crossTopicPool: Word[] = (allWords ?? []) as Word[];
 
     const built: GameQuestion[] = sorted.map((word) => {
-      const otherTopicWords = topicWords.filter((w) => w.id !== word.id);
-      const distractors = [...otherTopicWords, ...distractorPool]
-        .filter((w) => w.word !== word.word)
-        .sort(() => Math.random() - 0.5).slice(0, 3);
+      // Always prefer same-topic distractors — only fall back to cross-topic if needed
+      const sameTopicOthers = topicWords
+        .filter((w) => w.id !== word.id && w.word !== word.word)
+        .sort(() => Math.random() - 0.5);
+
+      let distractors: Word[];
+      if (sameTopicOthers.length >= 3) {
+        distractors = sameTopicOthers.slice(0, 3) as Word[];
+      } else {
+        const needed = 3 - sameTopicOthers.length;
+        const fallback = crossTopicPool
+          .filter((w) => w.word !== word.word)
+          .sort(() => Math.random() - 0.5)
+          .slice(0, needed) as Word[];
+        distractors = [...sameTopicOthers as Word[], ...fallback];
+      }
 
       const options = [word.word, ...distractors.map((d) => d.word)].sort(() => Math.random() - 0.5);
       const imageOptions = [word as Word, ...distractors.slice(0, 3) as Word[]].sort(() => Math.random() - 0.5);
@@ -181,16 +280,16 @@ export default function GameScreen() {
         await sound.playAsync();
       } else {
         Speech.stop();
-        Speech.speak(word.word, { language: 'en-US', rate: 0.85, pitch: 1.0 });
+        Speech.speak(word.word, { language: 'en-US', rate: slowMode ? 0.5 : 0.85, pitch: 1.0 });
       }
     } catch {
-      try { Speech.speak(word.word, { language: 'en-US', rate: 0.85 }); } catch { /* ignore */ }
+      try { Speech.speak(word.word, { language: 'en-US', rate: slowMode ? 0.5 : 0.85 }); } catch { /* ignore */ }
     }
   }
 
   function speakText(text: string) {
     if (muted) return;
-    try { Speech.stop(); Speech.speak(text, { language: 'en-US', rate: 0.85 }); } catch { /* ignore */ }
+    try { Speech.stop(); Speech.speak(text, { language: 'en-US', rate: slowMode ? 0.5 : 0.85 }); } catch { /* ignore */ }
   }
 
   async function handleSelect(answer: string) {
@@ -341,6 +440,12 @@ export default function GameScreen() {
         <Text style={styles.counter}>{currentIndex + 1} / {ROUND_SIZE}</Text>
         <View style={styles.headerRight}>
           <Text style={styles.scoreText}>⭐ {score}</Text>
+          <TouchableOpacity
+            style={[styles.slowBtn, slowMode && styles.slowBtnActive]}
+            onPress={() => setSlowMode((v) => !v)}
+          >
+            <Text style={styles.slowBtnText}>🐢</Text>
+          </TouchableOpacity>
           {/* Mute toggle — only for picture_quiz */}
           {mode === 'picture_quiz' && (
             <TouchableOpacity onPress={() => setMuted((m) => !m)} style={styles.muteBtn}>
@@ -374,9 +479,13 @@ export default function GameScreen() {
                 if (isAnswered && !isOpt && isOptCorrect) borderColor = Colors.success;
                 return (
                   <TouchableOpacity key={opt.id} style={[styles.imageOption, { borderColor }]} onPress={() => handleSelect(opt.word)} disabled={isAnswered}>
-                    {opt.image_url
-                      ? <Image source={{ uri: opt.image_url }} style={styles.optionImage} contentFit="cover" />
-                      : <View style={[styles.optionImage, styles.imagePlaceholder]}><Text style={styles.placeholderText}>{opt.word}</Text></View>
+                    {parseNumeralUri(opt.image_url ?? '') !== null
+                      ? <NumeralDisplay value={parseNumeralUri(opt.image_url!)!} style={styles.optionImage} small />
+                      : parseColorUri(opt.image_url ?? '')
+                        ? <ColorSwatch hex={parseColorUri(opt.image_url!)!} style={styles.optionImage} />
+                        : opt.image_url
+                          ? <Image source={{ uri: opt.image_url }} style={styles.optionImage} contentFit="cover" />
+                          : <View style={[styles.optionImage, styles.imagePlaceholder]}><Text style={styles.placeholderText}>{opt.word}</Text></View>
                     }
                     {isAnswered && <Text style={styles.imageLabel}>{opt.word}</Text>}
                   </TouchableOpacity>
@@ -390,9 +499,13 @@ export default function GameScreen() {
         {mode === 'word_quiz' && (
           <>
             <Text style={styles.instruction}>What word matches this picture?</Text>
-            {current.targetWord.image_url
-              ? <Image source={{ uri: current.targetWord.image_url }} style={styles.mainImage} contentFit="cover" />
-              : <View style={[styles.mainImage, styles.imagePlaceholder]}><Text style={styles.placeholderText}>{current.targetWord.word}</Text></View>
+            {parseNumeralUri(current.targetWord.image_url ?? '') !== null
+              ? <NumeralDisplay value={parseNumeralUri(current.targetWord.image_url!)!} style={styles.mainImage} />
+              : parseColorUri(current.targetWord.image_url ?? '')
+                ? <ColorSwatch hex={parseColorUri(current.targetWord.image_url!)!} style={styles.mainImage} />
+                : current.targetWord.image_url
+                  ? <Image source={{ uri: current.targetWord.image_url }} style={styles.mainImage} contentFit="cover" />
+                  : <View style={[styles.mainImage, styles.imagePlaceholder]}><Text style={styles.placeholderText}>{current.targetWord.word}</Text></View>
             }
             <WordOptions options={current.options} selected={selected} correct={current.targetWord.word} onSelect={handleSelect} disabled={isAnswered} />
           </>
@@ -544,6 +657,9 @@ const styles = StyleSheet.create({
   counter:   { fontSize: FontSize.base, color: Colors.textSecondary, fontWeight: FontWeight.medium },
   scoreText: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.primaryDark },
   muteBtn:   { padding: 4 },
+  slowBtn:      { borderRadius: 14, paddingHorizontal: 7, paddingVertical: 3, borderWidth: 1.5, borderColor: Colors.border, backgroundColor: Colors.surface },
+  slowBtnActive:{ borderColor: Colors.primary, backgroundColor: Colors.primary + '18' },
+  slowBtnText:  { fontSize: 15 },
   progressBar:  { height: 8, backgroundColor: Colors.border, marginHorizontal: 24, borderRadius: 4, overflow: 'hidden', marginBottom: 4 },
   progressFill: { height: '100%', backgroundColor: Colors.primary, borderRadius: 4 },
   content:   { padding: 24, paddingBottom: 120, gap: 20 },

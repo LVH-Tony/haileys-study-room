@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Dimensions,
+  Alert,
 } from 'react-native';
 import { useEffect, useRef, useState } from 'react';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -18,16 +19,36 @@ import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/store/auth.store';
 import { Colors } from '@/constants/colors';
 import { FontSize, FontWeight } from '@/constants/typography';
+import { numberToWords, generateNumbers, numeralUri, parseNumeralUri, getColorPool, colorUri, parseColorUri } from '@/lib/number-utils';
 import type { Word } from '@/lib/database.types';
 
 const { width: W, height: H } = Dimensions.get('window');
 const SWIPE_THRESHOLD = W * 0.3;
 const ROTATION_RANGE = 12; // degrees
 
+const NUMERAL_COLORS = ['#1976D2','#388E3C','#E64A19','#7B1FA2','#00796B','#F57C00','#C62828','#283593'];
+
+function NumeralDisplay({ value, style }: { value: number; style?: any }) {
+  const numStr = value.toLocaleString();
+  const fontSize = numStr.length <= 2 ? 100 : numStr.length <= 4 ? 72 : 52;
+  const bg = NUMERAL_COLORS[value % NUMERAL_COLORS.length];
+  return (
+    <View style={[style, { backgroundColor: bg, justifyContent: 'center', alignItems: 'center' }]}>
+      <Text style={{ fontSize, fontWeight: '900', color: '#fff', textShadowColor: 'rgba(0,0,0,0.2)', textShadowOffset: { width: 0, height: 3 }, textShadowRadius: 6 }}>
+        {numStr}
+      </Text>
+    </View>
+  );
+}
+
+function ColorSwatch({ hex, style, opacity }: { hex: string; style?: any; opacity?: number }) {
+  return <View style={[style, { backgroundColor: hex, opacity: opacity ?? 1 }]} />;
+}
+
 export default function FlashcardScreen() {
   const { topicId } = useLocalSearchParams<{ topicId: string }>();
   const router      = useRouter();
-  const { session } = useAuthStore();
+  const { session, profile } = useAuthStore();
 
   const [words, setWords]         = useState<Word[]>([]);
   const [index, setIndex]         = useState(0);
@@ -52,8 +73,53 @@ export default function FlashcardScreen() {
   useEffect(() => { loadWords(); }, []);
 
   async function loadWords() {
+    const { data: topicData } = await supabase.from('topics').select('name').eq('id', topicId).single();
+    const isNumbers = topicData?.name === 'Numbers';
+
+    const userLevel = (profile?.starting_level ?? 'beginner') as import('@/lib/database.types').DifficultyTier;
+
+    if (isNumbers) {
+      const count = { beginner: 20, elementary: 30, 'pre-intermediate': 40, intermediate: 50 }[userLevel] ?? 20;
+      const nums = generateNumbers(count, userLevel);
+      const generated: Word[] = nums.map((n) => ({
+        id: `num-${n}`,
+        word: numberToWords(n),
+        image_url: numeralUri(n),
+        definition: `The number ${n.toLocaleString()}`,
+        difficulty_score: 1,
+        topic_id: topicId,
+        audio_url: null,
+      } as any));
+      setWords(generated);
+      setLoading(false);
+      return;
+    }
+
+    const isColors = topicData?.name === 'Colors';
+    if (isColors) {
+      const pool = [...getColorPool(userLevel)].sort(() => Math.random() - 0.5);
+      const generated: Word[] = pool.map((c) => ({
+        id: `color-${c.name}`,
+        word: c.name,
+        image_url: colorUri(c.hex),
+        definition: c.definition,
+        difficulty_score: 1,
+        topic_id: topicId,
+        audio_url: null,
+      } as any));
+      setWords(generated);
+      setLoading(false);
+      return;
+    }
+
     const { data } = await supabase.from('words').select('*').eq('topic_id', topicId).order('difficulty_score');
-    setWords(data as Word[] ?? []);
+    const all = (data as Word[]) ?? [];
+    // Level-appropriate words first, harder words appended — both groups shuffled
+    const maxScore: Record<string, number> = { beginner: 2, elementary: 3, 'pre-intermediate': 5, intermediate: 99 };
+    const cap = maxScore[userLevel] ?? 99;
+    const levelWords = all.filter((w) => (w.difficulty_score ?? 1) <= cap).sort(() => Math.random() - 0.5);
+    const rest = all.filter((w) => (w.difficulty_score ?? 1) > cap).sort(() => Math.random() - 0.5);
+    setWords([...levelWords, ...rest]);
     setLoading(false);
   }
 
@@ -118,6 +184,31 @@ export default function FlashcardScreen() {
       if (i + 1 >= words.length) { setDone(true); return i; }
       return i + 1;
     });
+  }
+
+  async function submitFeedback(word: Word) {
+    Alert.alert(
+      'Report this card',
+      `What's wrong with "${word.word}"?`,
+      [
+        { text: 'Wrong image',      onPress: () => sendFeedback(word, 'wrong_image') },
+        { text: 'Wrong definition', onPress: () => sendFeedback(word, 'wrong_definition') },
+        { text: 'Wrong word',       onPress: () => sendFeedback(word, 'wrong_word') },
+        { text: 'Cancel', style: 'cancel' },
+      ]
+    );
+  }
+
+  async function sendFeedback(word: Word, reason: string) {
+    if (!session) return;
+    await supabase.from('feedback').insert({
+      user_id: session.user.id,
+      ref_type: 'flashcard',
+      ref_id: word.id,
+      rating: 'down',
+      note: reason,
+    } as any);
+    Alert.alert('Thanks!', 'Your feedback helps us improve the cards.');
   }
 
   async function saveWordStat(wordId: string, correct: boolean) {
@@ -224,6 +315,9 @@ export default function FlashcardScreen() {
           <TouchableOpacity onPress={() => speakWord(card.word, card.definition)}>
             <Ionicons name="volume-high" size={22} color={Colors.primary} />
           </TouchableOpacity>
+          <TouchableOpacity onPress={() => submitFeedback(card)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Ionicons name="flag-outline" size={20} color={Colors.textMuted} />
+          </TouchableOpacity>
         </View>
       </View>
 
@@ -246,10 +340,18 @@ export default function FlashcardScreen() {
       {/* Card stack — show next card behind */}
       {index + 1 < words.length && (
         <View style={[s.cardBehind]}>
-          {words[index + 1].image_url
-            ? <Image source={{ uri: words[index + 1].image_url! }} style={s.cardImageBehind} contentFit="contain" />
-            : <View style={[s.cardImageBehind, s.cardPlaceholder]} />
-          }
+          {(() => {
+            const nextCard = words[index + 1];
+            const num = parseNumeralUri(nextCard.image_url ?? '');
+            const hex = parseColorUri(nextCard.image_url ?? '');
+            return num !== null
+              ? <NumeralDisplay value={num} style={s.cardImageBehind} />
+              : hex
+                ? <ColorSwatch hex={hex} style={s.cardImageBehind} />
+                : nextCard.image_url
+                  ? <Image source={{ uri: nextCard.image_url }} style={s.cardImageBehind} contentFit="contain" />
+                  : <View style={[s.cardImageBehind, s.cardPlaceholder]} />;
+          })()}
         </View>
       )}
 
@@ -261,12 +363,17 @@ export default function FlashcardScreen() {
         <TouchableOpacity activeOpacity={1} onPress={flipCard} style={StyleSheet.absoluteFill}>
           {/* Front: image + word */}
           <Animated.View style={[s.cardFace, { opacity: frontOpacity, transform: [{ rotateY: frontInterpolate }] }]}>
-            {card.image_url
-              ? <Image source={{ uri: card.image_url }} style={s.cardImage} contentFit="contain" />
-              : <View style={[s.cardImage, s.cardPlaceholder]}>
-                  <Text style={s.placeholderEmoji}>📷</Text>
-                </View>
-            }
+            {(() => {
+              const num = parseNumeralUri(card.image_url ?? '');
+              const hex = parseColorUri(card.image_url ?? '');
+              return num !== null
+                ? <NumeralDisplay value={num} style={s.cardImage} />
+                : hex
+                  ? <ColorSwatch hex={hex} style={s.cardImage} />
+                  : card.image_url
+                    ? <Image source={{ uri: card.image_url }} style={s.cardImage} contentFit="contain" />
+                    : <View style={[s.cardImage, s.cardPlaceholder]}><Text style={s.placeholderEmoji}>📷</Text></View>;
+            })()}
             <View style={s.cardFooter}>
               <Text style={s.cardWord}>{card.word}</Text>
               <Text style={s.tapHint}>Tap to see definition</Text>
@@ -275,10 +382,17 @@ export default function FlashcardScreen() {
 
           {/* Back: definition */}
           <Animated.View style={[s.cardFace, s.cardBack, { opacity: backOpacity, transform: [{ rotateY: backInterpolate }] }]}>
-            {card.image_url
-              ? <Image source={{ uri: card.image_url }} style={[s.cardImage, { opacity: 0.35 }]} contentFit="contain" blurRadius={4} />
-              : <View style={[s.cardImage, s.cardPlaceholder, { opacity: 0.2 }]} />
-            }
+            {(() => {
+              const num = parseNumeralUri(card.image_url ?? '');
+              const hex = parseColorUri(card.image_url ?? '');
+              return num !== null
+                ? <NumeralDisplay value={num} style={[s.cardImage, { opacity: 0.25 }]} />
+                : hex
+                  ? <ColorSwatch hex={hex} style={s.cardImage} opacity={0.3} />
+                  : card.image_url
+                    ? <Image source={{ uri: card.image_url }} style={[s.cardImage, { opacity: 0.35 }]} contentFit="contain" blurRadius={4} />
+                    : <View style={[s.cardImage, s.cardPlaceholder, { opacity: 0.2 }]} />;
+            })()}
             <View style={[s.cardFooter, s.cardBackFooter]}>
               <Text style={s.cardWordBack}>{card.word}</Text>
               {card.definition

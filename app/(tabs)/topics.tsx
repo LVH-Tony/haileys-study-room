@@ -1,17 +1,18 @@
 import {
   View,
   Text,
-  FlatList,
+  ScrollView,
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
+  Alert,
 } from 'react-native';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/store/auth.store';
-import { Topic } from '@/lib/database.types';
+import { Topic, DifficultyTier } from '@/lib/database.types';
 import { Colors } from '@/constants/colors';
 import { FontSize, FontWeight } from '@/constants/typography';
 
@@ -21,15 +22,25 @@ const GAME_MODES = [
   { key: 'listen_pick',  label: '🔊 Listen & Pick', sub: 'Hear word → pick it' },
 ] as const;
 
-interface TopicGroup {
-  base: Topic;
-  expert?: Topic;
-}
+const TIERS: DifficultyTier[] = ['beginner', 'elementary', 'pre-intermediate', 'intermediate'];
 
-function groupTopics(topics: Topic[]): TopicGroup[] {
+const TIER_META: Record<DifficultyTier, { label: string; color: string; bg: string; unlock: string }> = {
+  beginner:          { label: '🌱 Beginner',        color: '#2E7D32', bg: '#E8F5E9', unlock: '' },
+  elementary:        { label: '📗 Elementary',       color: '#1565C0', bg: '#E3F2FD', unlock: '' },
+  'pre-intermediate':{ label: '📘 Pre-Intermediate', color: '#E65100', bg: '#FFF3E0', unlock: 'Complete Elementary topics to unlock' },
+  intermediate:      { label: '📙 Intermediate',     color: '#6A1B9A', bg: '#F3E5F5', unlock: 'Complete Pre-Intermediate topics to unlock' },
+};
+
+const TIER_ORDER: Record<DifficultyTier, number> = {
+  beginner: 0, elementary: 1, 'pre-intermediate': 2, intermediate: 3,
+};
+
+interface TopicGroup { base: Topic; expert?: Topic; }
+interface TierSection { tier: DifficultyTier; groups: TopicGroup[]; }
+
+function buildSections(topics: Topic[]): TierSection[] {
   const expertMap = new Map<string, Topic>();
   const baseList: Topic[] = [];
-
   for (const t of topics) {
     if (t.name.includes('— Expert')) {
       expertMap.set(t.name.replace(' — Expert', ''), t);
@@ -37,8 +48,24 @@ function groupTopics(topics: Topic[]): TopicGroup[] {
       baseList.push(t);
     }
   }
+  const groups = baseList.map((base) => ({ base, expert: expertMap.get(base.name) }));
+  return TIERS.map((tier) => ({
+    tier,
+    groups: groups
+      .filter((g) => g.base.difficulty_tier === tier)
+      .sort((a, b) => a.base.name.localeCompare(b.base.name)),
+  })).filter((s) => s.groups.length > 0);
+}
 
-  return baseList.map((base) => ({ base, expert: expertMap.get(base.name) }));
+// A user can freely play topics at their tier or one tier below/above
+// Beginner → accesses beginner + elementary; each level unlocks the next tier
+function maxAccessTier(level: DifficultyTier): number {
+  if (level === 'beginner') return 1;  // beginner can also play elementary
+  return TIER_ORDER[level] + 1;        // each tier up unlocks next
+}
+
+function isTierAccessible(tier: DifficultyTier, userLevel: DifficultyTier): boolean {
+  return TIER_ORDER[tier] <= Math.min(maxAccessTier(userLevel), 3);
 }
 
 export default function TopicsScreen() {
@@ -48,6 +75,8 @@ export default function TopicsScreen() {
   const { profile } = useAuthStore();
   const router = useRouter();
 
+  const userLevel: DifficultyTier = (profile?.starting_level as DifficultyTier) ?? 'beginner';
+
   useEffect(() => { fetchTopics(); }, []);
 
   async function fetchTopics() {
@@ -56,7 +85,11 @@ export default function TopicsScreen() {
     setLoading(false);
   }
 
-  function toggleExpand(id: string) {
+  function toggleExpand(id: string, locked: boolean) {
+    if (locked) {
+      Alert.alert('Locked', 'Level up to unlock this topic!');
+      return;
+    }
     setExpanded((prev) => (prev === id ? null : id));
   }
 
@@ -70,252 +103,307 @@ export default function TopicsScreen() {
 
   if (loading) {
     return (
-      <View style={styles.center}>
+      <View style={s.center}>
         <ActivityIndicator size="large" color={Colors.primary} />
       </View>
     );
   }
 
-  const groups = groupTopics(topics);
+  const sections = buildSections(topics);
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Topics</Text>
-      <Text style={styles.subtitle}>Pick a topic and game mode</Text>
+    <View style={s.container}>
+      <Text style={s.title}>Topics</Text>
+      <Text style={s.subtitle}>
+        Your level: <Text style={{ color: TIER_META[userLevel].color, fontWeight: FontWeight.bold }}>{TIER_META[userLevel].label}</Text>
+      </Text>
 
-      <FlatList
-        data={groups}
-        keyExtractor={(g) => g.base.id}
-        contentContainerStyle={styles.list}
-        renderItem={({ item: group }) => (
-          <TopicGroupCard
-            group={group}
-            expanded={expanded}
-            onToggle={toggleExpand}
-            onGame={goGame}
-            onFlashcard={goFlashcard}
-          />
-        )}
-      />
+      <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
+        {sections.map((section) => {
+          const meta   = TIER_META[section.tier];
+          const locked = !isTierAccessible(section.tier, userLevel);
+
+          return (
+            <View key={section.tier} style={s.section}>
+              {/* Tier section header */}
+              <View style={[s.sectionHeader, { backgroundColor: meta.bg, borderLeftColor: meta.color }]}>
+                <Text style={[s.sectionTitle, { color: meta.color }]}>{meta.label}</Text>
+                {locked
+                  ? <View style={[s.lockBadge, { borderColor: meta.color + '66' }]}>
+                      <Ionicons name="lock-closed" size={11} color={meta.color} />
+                      <Text style={[s.lockBadgeText, { color: meta.color }]}>Locked</Text>
+                    </View>
+                  : <Text style={[s.countBadge, { color: meta.color }]}>{section.groups.length} topics</Text>
+                }
+              </View>
+
+              {/* Hint when locked */}
+              {locked && (
+                <View style={[s.lockedHint, { borderColor: meta.color + '33' }]}>
+                  <Ionicons name="information-circle-outline" size={14} color={meta.color} />
+                  <Text style={[s.lockedHintText, { color: meta.color }]}>{meta.unlock}</Text>
+                </View>
+              )}
+
+              {/* Topic cards */}
+              <View style={[s.tierList, locked && s.tierListLocked]}>
+                {section.groups.map((group) => {
+                  const expertLocked = group.expert
+                    ? !isTierAccessible(group.expert.difficulty_tier as DifficultyTier, userLevel)
+                    : false;
+
+                  return (
+                    <View key={group.base.id} style={s.groupWrapper}>
+                      {/* Base topic card */}
+                      <TopicCard
+                        topic={group.base}
+                        expanded={expanded}
+                        locked={locked}
+                        tierColor={meta.color}
+                        onToggle={toggleExpand}
+                        onGame={goGame}
+                        onFlashcard={goFlashcard}
+                      />
+
+                      {/* Expert variant (nested, gold border) */}
+                      {group.expert && (
+                        <View style={s.expertWrapper}>
+                          <View style={s.expertConnector} />
+                          <View style={s.expertCardOuter}>
+                            <TopicCard
+                              topic={group.expert}
+                              expanded={expanded}
+                              locked={locked || expertLocked}
+                              tierColor="#B8860B"
+                              isExpert
+                              onToggle={toggleExpand}
+                              onGame={goGame}
+                              onFlashcard={goFlashcard}
+                            />
+                          </View>
+                        </View>
+                      )}
+                    </View>
+                  );
+                })}
+              </View>
+            </View>
+          );
+        })}
+        <View style={{ height: 40 }} />
+      </ScrollView>
     </View>
   );
 }
 
-// ── Topic Group Card ───────────────────────────────────────────────────────────
+// ── Single Topic Card ──────────────────────────────────────────────────────────
 
-function TopicGroupCard({
-  group,
-  expanded,
-  onToggle,
-  onGame,
-  onFlashcard,
+function TopicCard({
+  topic, expanded, locked, tierColor, isExpert,
+  onToggle, onGame, onFlashcard,
 }: {
-  group: TopicGroup;
-  expanded: string | null;
-  onToggle: (id: string) => void;
+  topic: Topic; expanded: string | null; locked: boolean; tierColor: string;
+  isExpert?: boolean;
+  onToggle: (id: string, locked: boolean) => void;
   onGame: (topicId: string, mode: string) => void;
   onFlashcard: (topicId: string) => void;
 }) {
-  const { base, expert } = group;
-  const baseOpen   = expanded === base.id;
-  const expertOpen = expert && expanded === expert.id;
+  const isOpen = expanded === topic.id;
+  const displayName = isExpert ? topic.name.replace(' — Expert', '') : topic.name;
 
   return (
-    <View style={styles.groupWrapper}>
-      {/* ── Base topic ── */}
-      <View style={styles.topicCard}>
-        <TouchableOpacity style={styles.topicRow} onPress={() => onToggle(base.id)}>
-          <View style={styles.topicMeta}>
-            <Text style={styles.topicName}>{base.name}</Text>
-            <Text style={styles.topicTier}>{tierLabel(base.difficulty_tier)}</Text>
-          </View>
-          <View style={styles.topicRowRight}>
-            {expert && (
-              <View style={styles.expertChip}>
-                <Ionicons name="star" size={10} color="#B8860B" />
-                <Text style={styles.expertChipText}>Expert</Text>
-              </View>
-            )}
-            <Text style={styles.chevron}>{baseOpen ? '▲' : '▼'}</Text>
-          </View>
-        </TouchableOpacity>
-
-        {baseOpen && (
-          <ModesPanel topicId={base.id} onGame={onGame} onFlashcard={onFlashcard} />
-        )}
-      </View>
-
-      {/* ── Expert variant (indented, gold accent) ── */}
-      {expert && (
-        <View style={styles.expertCard}>
-          <TouchableOpacity style={styles.topicRow} onPress={() => onToggle(expert.id)}>
-            <View style={styles.topicMeta}>
-              <View style={styles.expertNameRow}>
-                <Ionicons name="star" size={14} color="#B8860B" />
-                <Text style={styles.expertTopicName}>{base.name} — Expert</Text>
-              </View>
-              <Text style={styles.topicTier}>{tierLabel(expert.difficulty_tier)}</Text>
+    <View style={[
+      s.topicCard,
+      isExpert && s.topicCardExpert,
+      locked && s.topicCardLocked,
+      { borderColor: locked ? '#DDD' : isExpert ? '#D4AF37' : tierColor + '44' },
+    ]}>
+      <TouchableOpacity
+        style={s.topicRow}
+        onPress={() => onToggle(topic.id, locked)}
+        activeOpacity={locked ? 0.5 : 0.7}
+      >
+        <View style={s.topicMeta}>
+          {isExpert && (
+            <View style={s.expertTag}>
+              <Ionicons name="star" size={10} color="#B8860B" />
+              <Text style={s.expertTagText}>Expert</Text>
             </View>
-            <Text style={styles.chevron}>{expertOpen ? '▲' : '▼'}</Text>
-          </TouchableOpacity>
-
-          {expertOpen && (
-            <ModesPanel topicId={expert.id} onGame={onGame} onFlashcard={onFlashcard} />
           )}
+          <Text style={[s.topicName, locked && s.topicNameLocked]}>{displayName}</Text>
         </View>
+
+        {locked
+          ? <Ionicons name="lock-closed" size={18} color="#BBB" />
+          : <Ionicons name={isOpen ? 'chevron-up' : 'chevron-down'} size={18} color={tierColor} />
+        }
+      </TouchableOpacity>
+
+      {isOpen && !locked && (
+        <ModesPanel topicId={topic.id} tierColor={tierColor} onGame={onGame} onFlashcard={onFlashcard} />
       )}
     </View>
   );
 }
 
-// ── Modes panel (shared by base and expert) ────────────────────────────────────
+// ── Modes Panel ───────────────────────────────────────────────────────────────
 
 function ModesPanel({
-  topicId,
-  onGame,
-  onFlashcard,
+  topicId, tierColor, onGame, onFlashcard,
 }: {
-  topicId: string;
+  topicId: string; tierColor: string;
   onGame: (id: string, mode: string) => void;
   onFlashcard: (id: string) => void;
 }) {
   return (
-    <View style={styles.modes}>
+    <View style={[s.modes, { borderTopColor: tierColor + '33' }]}>
       <TouchableOpacity
-        style={[styles.modeBtn, styles.flashcardBtn]}
+        style={[s.modeBtn, { borderColor: tierColor + '55', backgroundColor: tierColor + '08' }]}
         onPress={() => onFlashcard(topicId)}
       >
-        <Text style={styles.modeLabel}>🃏 Flashcards</Text>
-        <Text style={styles.modeSub}>Swipe to learn words</Text>
+        <Text style={s.modeLabel}>🃏 Flashcards</Text>
+        <Text style={s.modeSub}>Swipe to learn words</Text>
       </TouchableOpacity>
       {GAME_MODES.map((mode) => (
         <TouchableOpacity
           key={mode.key}
-          style={styles.modeBtn}
+          style={s.modeBtn}
           onPress={() => onGame(topicId, mode.key)}
         >
-          <Text style={styles.modeLabel}>{mode.label}</Text>
-          <Text style={styles.modeSub}>{mode.sub}</Text>
+          <Text style={s.modeLabel}>{mode.label}</Text>
+          <Text style={s.modeSub}>{mode.sub}</Text>
         </TouchableOpacity>
       ))}
     </View>
   );
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
+// ── Styles ────────────────────────────────────────────────────────────────────
 
-function tierLabel(tier: string) {
-  const map: Record<string, string> = {
-    beginner:          '🌱 Beginner',
-    elementary:        '📗 Elementary',
-    'pre-intermediate':'📘 Pre-Int',
-    intermediate:      '📙 Intermediate',
-  };
-  return map[tier] ?? tier;
-}
-
-// ── Styles ─────────────────────────────────────────────────────────────────────
-
-const styles = StyleSheet.create({
-  container:  { flex: 1, backgroundColor: Colors.background },
-  center:     { flex: 1, backgroundColor: Colors.background, justifyContent: 'center', alignItems: 'center' },
+const s = StyleSheet.create({
+  container: { flex: 1, backgroundColor: Colors.background },
+  center:    { flex: 1, backgroundColor: Colors.background, justifyContent: 'center', alignItems: 'center' },
 
   title: {
     fontSize: FontSize['2xl'],
     fontWeight: FontWeight.extrabold,
     color: Colors.text,
-    paddingHorizontal: 24,
+    paddingHorizontal: 20,
     paddingTop: 60,
   },
   subtitle: {
-    fontSize: FontSize.base,
+    fontSize: FontSize.sm,
     color: Colors.textSecondary,
-    paddingHorizontal: 24,
+    paddingHorizontal: 20,
     marginTop: 4,
     marginBottom: 16,
   },
 
-  list: { paddingHorizontal: 24, gap: 14, paddingBottom: 40 },
+  scroll: { paddingHorizontal: 20, gap: 24, paddingBottom: 20 },
 
-  // Group wrapper — base + expert sit visually connected
-  groupWrapper: { gap: 3 },
+  // ── Tier Section ──────────────────────────────────────────────────────────
+  section: { gap: 8 },
 
-  // Base topic card
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderLeftWidth: 4,
+  },
+  sectionTitle: { fontSize: FontSize.md, fontWeight: FontWeight.bold },
+
+  lockBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  lockBadgeText: { fontSize: 11, fontWeight: FontWeight.semibold },
+
+  countBadge: { fontSize: FontSize.xs, fontWeight: FontWeight.medium },
+
+  lockedHint: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    backgroundColor: 'rgba(0,0,0,0.02)',
+  },
+  lockedHintText: { fontSize: FontSize.xs, flex: 1 },
+
+  tierList:       { gap: 6 },
+  tierListLocked: { opacity: 0.55 },
+
+  // ── Topic Group ───────────────────────────────────────────────────────────
+  groupWrapper: { gap: 0 },
+
+  expertWrapper: { flexDirection: 'row', marginTop: 2 },
+  expertConnector: {
+    width: 18,
+    borderLeftWidth: 2,
+    borderBottomWidth: 2,
+    borderColor: '#D4AF37',
+    borderBottomLeftRadius: 8,
+    marginLeft: 18,
+    marginBottom: 12,
+  },
+  expertCardOuter: { flex: 1 },
+
+  // ── Topic Card ────────────────────────────────────────────────────────────
   topicCard: {
     backgroundColor: Colors.surface,
-    borderRadius: 18,
-    borderWidth: 1.5,
-    borderColor: Colors.border,
-    overflow: 'hidden',
-  },
-
-  // Expert card — indented + gold border
-  expertCard: {
-    backgroundColor: '#FFFDF0',
     borderRadius: 14,
     borderWidth: 1.5,
-    borderColor: '#D4AF37',
     overflow: 'hidden',
-    marginLeft: 12,
+  },
+  topicCardExpert: {
+    backgroundColor: '#FFFDF0',
+  },
+  topicCardLocked: {
+    backgroundColor: Colors.background,
   },
 
   topicRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 18,
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
   },
-  topicRowRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  topicMeta:     { gap: 3, flex: 1 },
+  topicMeta: { flex: 1, gap: 2 },
+  topicName: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.text },
+  topicNameLocked: { color: Colors.textMuted },
 
-  topicName:  { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.text },
-  topicTier:  { fontSize: FontSize.sm, color: Colors.textSecondary },
-
-  expertNameRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  expertTopicName: {
-    fontSize: FontSize.md,
-    fontWeight: FontWeight.bold,
-    color: '#7A6000',
-  },
-
-  // ⭐ Expert chip shown on base row
-  expertChip: {
+  expertTag: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 3,
-    backgroundColor: '#FFF8DC',
-    borderWidth: 1,
-    borderColor: '#D4AF37',
-    borderRadius: 8,
-    paddingHorizontal: 7,
-    paddingVertical: 2,
+    marginBottom: 1,
   },
-  expertChipText: {
-    fontSize: 10,
-    fontWeight: FontWeight.bold,
-    color: '#B8860B',
-  },
+  expertTagText: { fontSize: 10, fontWeight: FontWeight.bold, color: '#B8860B' },
 
-  chevron: { fontSize: FontSize.sm, color: Colors.textMuted },
-
+  // ── Modes Panel ───────────────────────────────────────────────────────────
   modes: {
     borderTopWidth: 1,
-    borderTopColor: Colors.border,
     padding: 12,
     gap: 8,
   },
   modeBtn: {
     backgroundColor: Colors.background,
-    borderRadius: 12,
-    padding: 14,
+    borderRadius: 10,
+    padding: 12,
     borderWidth: 1,
     borderColor: Colors.border,
   },
-  flashcardBtn: {
-    borderWidth: 1.5,
-    borderColor: Colors.primary + '50',
-    backgroundColor: Colors.primary + '0A',
-  },
-  modeLabel: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.text },
-  modeSub:   { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
+  modeLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.text },
+  modeSub:   { fontSize: FontSize.xs, color: Colors.textSecondary, marginTop: 1 },
 });

@@ -136,6 +136,7 @@ interface LevelProgress {
 export default function ConversationScreen() {
   const [screen, setScreen]             = useState<Screen>('map');
   const [inputMode, setInputMode]       = useState<InputMode>('voice');
+  const [slowMode, setSlowMode]         = useState(false);
   const [session, setSession]           = useState<ActiveSession | null>(null);
   const [messages, setMessages]         = useState<ConversationMessage[]>([]);
   const [hints, setHints]               = useState<string[]>([]);
@@ -311,7 +312,7 @@ export default function ConversationScreen() {
   }
 
   function playTts(text: string) {
-    try { Speech.stop(); Speech.speak(text, { language: 'en-US', rate: 0.9 }); } catch { /* ok */ }
+    try { Speech.stop(); Speech.speak(text, { language: 'en-US', rate: slowMode ? 0.5 : 0.9 }); } catch { /* ok */ }
   }
 
   async function submitFeedback(msgIndex: number, rating: 'up' | 'down') {
@@ -589,6 +590,12 @@ export default function ConversationScreen() {
           )}
         </View>
         <View style={styles.headerRight}>
+          <TouchableOpacity
+            style={[styles.slowBtn, slowMode && styles.slowBtnActive]}
+            onPress={() => setSlowMode((v) => !v)}
+          >
+            <Text style={styles.slowBtnText}>🐢</Text>
+          </TouchableOpacity>
           <TouchableOpacity onPress={handleEndEarly} style={styles.endBtn}>
             <Ionicons name="stop-circle-outline" size={20} color={Colors.error} />
           </TouchableOpacity>
@@ -610,6 +617,11 @@ export default function ConversationScreen() {
         {messages.map((msg, i) => (
           <View key={i} style={msg.role === 'ai' ? styles.aiBubble : styles.userBubble}>
             <Text style={[styles.bubbleText, msg.role === 'user' && { color: Colors.white }]}>{msg.content}</Text>
+            {msg.role === 'ai' && (
+              <TouchableOpacity onPress={() => playTts(msg.content)} style={styles.bubbleSpeakBtn}>
+                <Ionicons name="volume-high" size={13} color={Colors.primary} />
+              </TouchableOpacity>
+            )}
             {msg.evaluation && (
               <View style={styles.evalBox}>
                 <Text style={[styles.evalStatus, msg.evaluation.status === 'correct' && { color: Colors.success }, msg.evaluation.status === 'acceptable' && { color: Colors.warning }, msg.evaluation.status === 'preferred' && { color: Colors.error }]}>
@@ -756,6 +768,9 @@ const styles = StyleSheet.create({
   personaLabel: { fontSize: 10, color: Colors.textMuted, fontStyle: 'italic' },
   headerRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   endBtn: { padding: 2 },
+  slowBtn:      { borderRadius: 14, paddingHorizontal: 7, paddingVertical: 3, borderWidth: 1.5, borderColor: Colors.border, backgroundColor: Colors.surface },
+  slowBtnActive:{ borderColor: Colors.primary, backgroundColor: Colors.primary + '18' },
+  slowBtnText:  { fontSize: 15 },
 
   progressContainer: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: Colors.border },
   progressTrack: { flex: 1, height: 6, backgroundColor: Colors.border, borderRadius: 3, overflow: 'hidden' },
@@ -768,6 +783,7 @@ const styles = StyleSheet.create({
   aiBubble: { backgroundColor: Colors.surface, borderRadius: 16, borderBottomLeftRadius: 4, padding: 14, alignSelf: 'flex-start', maxWidth: '85%', borderWidth: 1, borderColor: Colors.border, gap: 8 },
   userBubble: { backgroundColor: Colors.primary, borderRadius: 16, borderBottomRightRadius: 4, padding: 14, alignSelf: 'flex-end', maxWidth: '85%', gap: 8 },
   bubbleText: { fontSize: FontSize.base, color: Colors.text },
+  bubbleSpeakBtn: { alignSelf: 'flex-end', padding: 4, opacity: 0.6 },
   evalBox: { backgroundColor: Colors.background, borderRadius: 10, padding: 10, gap: 4 },
   evalStatus: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.textSecondary },
   evalPref: { fontSize: FontSize.sm, color: Colors.text, fontStyle: 'italic' },
