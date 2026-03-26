@@ -135,7 +135,7 @@ interface LevelProgress {
 // ── COMPONENT ─────────────────────────────────────────────────────────────────
 export default function ConversationScreen() {
   const [screen, setScreen]             = useState<Screen>('map');
-  const [inputMode, setInputMode]       = useState<InputMode>('voice');
+  const [inputMode, setInputMode]       = useState<InputMode>(Platform.OS === 'web' ? 'text' : 'voice');
   const [slowMode, setSlowMode]         = useState(false);
   const [session, setSession]           = useState<ActiveSession | null>(null);
   const [messages, setMessages]         = useState<ConversationMessage[]>([]);
@@ -236,6 +236,7 @@ export default function ConversationScreen() {
 
   // ── VOICE ───────────────────────────────────────────────────────────────────
   async function startRecording() {
+    if (Platform.OS === 'web') return;
     try {
       const { granted } = await Audio.requestPermissionsAsync();
       if (!granted) { Alert.alert('Permission denied', 'Microphone access is required.'); return; }
@@ -250,7 +251,9 @@ export default function ConversationScreen() {
     if (!recordingRef.current || !session) return;
     setRecording(false); setProcessing(true);
     await recordingRef.current.stopAndUnloadAsync();
-    await Audio.setAudioModeAsync({ allowsRecordingIOS: false, playsInSilentModeIOS: true });
+    if (Platform.OS !== 'web') {
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: false, playsInSilentModeIOS: true });
+    }
     const uri = recordingRef.current.getURI();
     recordingRef.current = null;
     if (!uri) { setProcessing(false); return; }
@@ -599,9 +602,11 @@ export default function ConversationScreen() {
           <TouchableOpacity onPress={handleEndEarly} style={styles.endBtn}>
             <Ionicons name="stop-circle-outline" size={20} color={Colors.error} />
           </TouchableOpacity>
-          <TouchableOpacity onPress={() => setInputMode((m) => m === 'voice' ? 'text' : 'voice')}>
-            <Ionicons name={inputMode === 'voice' ? 'chatbubble-ellipses-outline' : 'mic-outline'} size={20} color={Colors.primary} />
-          </TouchableOpacity>
+          {Platform.OS !== 'web' && (
+            <TouchableOpacity onPress={() => setInputMode((m) => m === 'voice' ? 'text' : 'voice')}>
+              <Ionicons name={inputMode === 'voice' ? 'chatbubble-ellipses-outline' : 'mic-outline'} size={20} color={Colors.primary} />
+            </TouchableOpacity>
+          )}
         </View>
       </View>
 
@@ -663,7 +668,7 @@ export default function ConversationScreen() {
         </View>
       )}
 
-      {inputMode === 'voice' ? (
+      {inputMode === 'voice' && Platform.OS !== 'web' ? (
         <View style={styles.micRow}>
           <TouchableOpacity style={[styles.micBtn, recording && styles.micBtnRecording, { backgroundColor: recording ? Colors.error : (lvlMeta?.color ?? Colors.primary) }]} onPress={recording ? stopRecordingAndSubmit : startRecording} disabled={processing}>
             <Ionicons name={recording ? 'stop-circle' : 'mic'} size={32} color={Colors.white} />

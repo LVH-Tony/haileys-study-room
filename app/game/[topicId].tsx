@@ -272,7 +272,9 @@ export default function GameScreen() {
   async function playWordAudio(word: Word) {
     if (muted) return;
     try {
-      await Audio.setAudioModeAsync({ playsInSilentModeIOS: true, staysActiveInBackground: false, shouldDuckAndroid: true });
+      if (Platform.OS !== 'web') {
+        await Audio.setAudioModeAsync({ playsInSilentModeIOS: true, staysActiveInBackground: false, shouldDuckAndroid: true });
+      }
       if (word.audio_url) {
         soundRef.current?.unloadAsync();
         const { sound } = await Audio.Sound.createAsync({ uri: word.audio_url });

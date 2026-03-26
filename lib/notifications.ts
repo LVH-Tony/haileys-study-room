@@ -1,54 +1,61 @@
-import * as Notifications from 'expo-notifications';
-import * as Device from 'expo-device';
 import { Platform } from 'react-native';
 import { supabase } from './supabase';
 
 export type ReminderWindow = 'morning' | 'afternoon' | 'evening';
 
-// Window → default trigger hour (24h)
+const IS_WEB = Platform.OS === 'web';
+
 const WINDOW_HOURS: Record<ReminderWindow, number> = {
   morning: 8,
   afternoon: 13,
   evening: 20,
 };
 
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: true,
-    shouldSetBadge: true,
-  }),
-});
+// Only set up notification handler on native
+if (!IS_WEB) {
+  const Notifications = require('expo-notifications');
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowBanner: true,
+      shouldShowList: true,
+      shouldPlaySound: true,
+      shouldSetBadge: true,
+    }),
+  });
+}
 
 export async function requestNotificationPermissions(): Promise<boolean> {
+  if (IS_WEB) return false;
+  const Notifications = require('expo-notifications');
   const { status: existing } = await Notifications.getPermissionsAsync();
   if (existing === 'granted') return true;
   const { status } = await Notifications.requestPermissionsAsync();
   return status === 'granted';
 }
 
-/** Get the Expo push token and save it to the user's profile (for nudges). */
 export async function registerPushToken(userId: string): Promise<void> {
+  if (IS_WEB) return;
   try {
+    const Notifications = require('expo-notifications');
     const granted = await requestNotificationPermissions();
     if (!granted) return;
     const { data: token } = await Notifications.getExpoPushTokenAsync();
     if (!token) return;
     await supabase.from('user_profiles').update({ push_token: token }).eq('id', userId);
-  } catch { /* ignore — push token not critical */ }
+  } catch { /* ignore */ }
 }
 
 export async function scheduleStudyReminders(options: {
   enabled: boolean;
   mode: 'window' | 'specific';
   window?: ReminderWindow;
-  specificTime?: string; // "HH:MM"
+  specificTime?: string;
   repeatCount: number;
   repeatGapMinutes: number;
 }) {
-  // Always cancel existing reminders first
-  await cancelStudyReminders();
+  if (IS_WEB) return;
+  const Notifications = require('expo-notifications');
+  await Notifications.cancelAllScheduledNotificationsAsync();
   if (!options.enabled) return;
 
   const granted = await requestNotificationPermissions();
@@ -57,7 +64,6 @@ export async function scheduleStudyReminders(options: {
   const baseHour = options.mode === 'specific' && options.specificTime
     ? parseInt(options.specificTime.split(':')[0], 10)
     : WINDOW_HOURS[options.window ?? 'evening'];
-
   const baseMinute = options.mode === 'specific' && options.specificTime
     ? parseInt(options.specificTime.split(':')[1], 10)
     : 0;
@@ -72,7 +78,6 @@ export async function scheduleStudyReminders(options: {
     const totalMinutes = baseHour * 60 + baseMinute + i * options.repeatGapMinutes;
     const hour = Math.floor(totalMinutes / 60) % 24;
     const minute = totalMinutes % 60;
-
     await Notifications.scheduleNotificationAsync({
       identifier: `study-reminder-${i}`,
       content: {
@@ -91,10 +96,14 @@ export async function scheduleStudyReminders(options: {
 }
 
 export async function cancelStudyReminders() {
+  if (IS_WEB) return;
+  const Notifications = require('expo-notifications');
   await Notifications.cancelAllScheduledNotificationsAsync();
 }
 
 export async function scheduleWotdNotification(word: string, hour = 7, minute = 0) {
+  if (IS_WEB) return;
+  const Notifications = require('expo-notifications');
   await Notifications.scheduleNotificationAsync({
     identifier: 'wotd',
     content: {
@@ -112,7 +121,8 @@ export async function scheduleWotdNotification(word: string, hour = 7, minute = 
 }
 
 export async function setupAndroidChannels() {
-  if (Platform.OS !== 'android') return;
+  if (IS_WEB || Platform.OS !== 'android') return;
+  const Notifications = require('expo-notifications');
   await Notifications.setNotificationChannelAsync('study-reminders', {
     name: 'Study Reminders',
     importance: Notifications.AndroidImportance.HIGH,

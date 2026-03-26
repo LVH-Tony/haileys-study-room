@@ -371,8 +371,8 @@ export default function ProfileScreen() {
         </View>
       </View>
 
-      {/* ── Notifications ────────────────────────────────────────────────── */}
-      {settings && (
+      {/* ── Notifications (mobile only) ──────────────────────────────────── */}
+      {settings && Platform.OS !== 'web' && (
         <>
           <Section title="Word of the Day">
             <SettingRow
