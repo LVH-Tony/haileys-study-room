@@ -554,27 +554,27 @@ export default function ProfileScreen() {
 
         <TouchableOpacity
           style={styles.retakeBtn}
-          onPress={() =>
-            Alert.alert(
-              'Retake Placement Test',
-              'This will reset your current level and run you through the placement test again. Continue?',
-              [
-                { text: 'Cancel', style: 'cancel' },
-                {
-                  text: 'Retake',
-                  onPress: async () => {
-                    if (!profile?.id) return;
-                    await supabase
-                      .from('user_profiles')
-                      .update({ placement_score: null })
-                      .eq('id', profile.id);
-                    await fetchProfile(profile.id);
-                    // _layout.tsx will detect placement_score = null and route to the test
-                  },
-                },
-              ],
-            )
-          }
+          onPress={async () => {
+            const confirmed = Platform.OS === 'web'
+              ? window.confirm('This will reset your current level and run you through the placement test again. Continue?')
+              : await new Promise<boolean>((resolve) =>
+                  Alert.alert(
+                    'Retake Placement Test',
+                    'This will reset your current level and run you through the placement test again. Continue?',
+                    [
+                      { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+                      { text: 'Retake', onPress: () => resolve(true) },
+                    ],
+                  )
+                );
+            if (!confirmed || !profile?.id) return;
+            await supabase
+              .from('user_profiles')
+              .update({ placement_score: null })
+              .eq('id', profile.id);
+            await fetchProfile(profile.id);
+            // _layout.tsx will detect placement_score = null and route to the test
+          }}
         >
           <Ionicons name="reload-outline" size={18} color={Colors.primary} />
           <Text style={styles.retakeText}>Retake Placement Test</Text>
