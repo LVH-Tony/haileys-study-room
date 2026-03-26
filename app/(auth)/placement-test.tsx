@@ -306,6 +306,24 @@ export default function PlacementTestScreen() {
     setSkipped(false);
   }
 
+  async function skipTest() {
+    setSubmitting(true);
+    try {
+      if (session?.user.id) {
+        await supabase
+          .from('user_profiles')
+          .update({ starting_level: 'beginner', convo_level: 1 })
+          .eq('id', session.user.id);
+        await fetchProfile(session.user.id);
+      }
+    } catch (e) {
+      console.warn('skipTest error:', e);
+    } finally {
+      setSubmitting(false);
+      router.replace('/(tabs)/');
+    }
+  }
+
   async function finishTest(finalScore: number) {
     setSubmitting(true);
     const levelResult = scoreToLevel(finalScore);
@@ -364,13 +382,28 @@ export default function PlacementTestScreen() {
         <TouchableOpacity
           style={[styles.btn, styles.btnPrimary]}
           onPress={() => { setScreen('test'); }}
-          disabled={loading}
+          disabled={loading || submitting}
         >
           {loading
             ? <ActivityIndicator color={Colors.white} />
             : <Text style={styles.btnText}>Start Test →</Text>
           }
         </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.skipIntroBtn}
+          onPress={skipTest}
+          disabled={submitting}
+        >
+          {submitting
+            ? <ActivityIndicator size="small" color={Colors.textMuted} />
+            : <Text style={styles.skipIntroText}>Skip — start as Beginner</Text>
+          }
+        </TouchableOpacity>
+
+        <Text style={styles.skipNote}>
+          You can retake this test anytime in Settings.
+        </Text>
       </View>
     );
   }
@@ -564,6 +597,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     gap: 4,
   },
+  skipIntroBtn: { paddingVertical: 14, paddingHorizontal: 20, alignItems: 'center' },
+  skipIntroText: { fontSize: FontSize.base, color: Colors.textMuted, textDecorationLine: 'underline' },
+  skipNote: { fontSize: FontSize.sm, color: Colors.textMuted, textAlign: 'center', paddingHorizontal: 16 },
   infoRow:   { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 10 },
   infoIcon:  { fontSize: 24, width: 32, textAlign: 'center' },
   infoTitle: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.text },
