@@ -22,17 +22,18 @@ const GAME_MODES = [
   { key: 'listen_pick',  label: '🔊 Listen & Pick', sub: 'Hear word → pick it' },
 ] as const;
 
-const TIERS: DifficultyTier[] = ['beginner', 'elementary', 'pre-intermediate', 'intermediate'];
+const TIERS: DifficultyTier[] = ['beginner', 'elementary', 'pre-intermediate', 'intermediate', 'advanced'];
 
 const TIER_META: Record<DifficultyTier, { label: string; color: string; bg: string; unlock: string }> = {
   beginner:          { label: '🌱 Beginner',        color: '#2E7D32', bg: '#E8F5E9', unlock: '' },
   elementary:        { label: '📗 Elementary',       color: '#1565C0', bg: '#E3F2FD', unlock: '' },
   'pre-intermediate':{ label: '📘 Pre-Intermediate', color: '#E65100', bg: '#FFF3E0', unlock: 'Complete Elementary topics to unlock' },
   intermediate:      { label: '📙 Intermediate',     color: '#6A1B9A', bg: '#F3E5F5', unlock: 'Complete Pre-Intermediate topics to unlock' },
+  advanced:          { label: '🏆 Advanced',          color: '#B71C1C', bg: '#FFEBEE', unlock: 'Complete Intermediate topics to unlock' },
 };
 
 const TIER_ORDER: Record<DifficultyTier, number> = {
-  beginner: 0, elementary: 1, 'pre-intermediate': 2, intermediate: 3,
+  beginner: 0, elementary: 1, 'pre-intermediate': 2, intermediate: 3, advanced: 4,
 };
 
 interface TopicGroup { base: Topic; expert?: Topic; }
@@ -61,11 +62,12 @@ function buildSections(topics: Topic[]): TierSection[] {
 // Beginner → accesses beginner + elementary; each level unlocks the next tier
 function maxAccessTier(level: DifficultyTier): number {
   if (level === 'beginner') return 1;  // beginner can also play elementary
+  if (level === 'advanced') return 4;  // advanced can play everything
   return TIER_ORDER[level] + 1;        // each tier up unlocks next
 }
 
 function isTierAccessible(tier: DifficultyTier, userLevel: DifficultyTier): boolean {
-  return TIER_ORDER[tier] <= Math.min(maxAccessTier(userLevel), 3);
+  return TIER_ORDER[tier] <= Math.min(maxAccessTier(userLevel), 4);
 }
 
 export default function TopicsScreen() {

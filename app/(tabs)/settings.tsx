@@ -68,6 +68,7 @@ const LEVEL_LABEL: Record<string, string> = {
   elementary: 'Elementary 🌿',
   'pre-intermediate': 'Pre-Intermediate 🌳',
   intermediate: 'Intermediate 🌲',
+  advanced: 'Advanced 🏆',
 };
 
 // ─── initials avatar ──────────────────────────────────────────────────────────
@@ -127,7 +128,7 @@ export default function ProfileScreen() {
   useEffect(() => {
     if (profile?.id) {
       fetchSettings(profile.id);
-      setupAndroidChannels();
+      if (Platform.OS !== 'web') setupAndroidChannels();
       setNameInput(profile.display_name);
     }
   }, [profile?.id]);
@@ -148,31 +149,41 @@ export default function ProfileScreen() {
   }
 
   async function handlePickAvatar() {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission needed', 'Please allow photo access to change your profile picture.');
-      return;
+    if (Platform.OS !== 'web') {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission needed', 'Please allow photo access to change your profile picture.');
+        return;
+      }
     }
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [1, 1],
-      quality: 0.7,
-      base64: true,
+      quality: 0.5,
+      base64: Platform.OS !== 'web', // avoid huge base64 on web; use fetch(uri) instead
     });
     if (result.canceled || !result.assets[0]) return;
 
     const asset = result.assets[0];
     setUploadingAvatar(true);
     try {
-      const rawExt = asset.uri.split('.').pop()?.toLowerCase() ?? 'jpg';
+      const rawExt = asset.uri.split('.').pop()?.split('?')[0].toLowerCase() ?? 'jpg';
       const ext = rawExt === 'jpg' ? 'jpeg' : rawExt;
       const fileName = `${profile!.id}.${ext}`;
 
-      if (!asset.base64) throw new Error('Could not read image data. Please try again.');
-      const binaryStr = atob(asset.base64);
-      const bytes = new Uint8Array(binaryStr.length);
-      for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+      let bytes: Uint8Array;
+      if (Platform.OS === 'web') {
+        // On web, fetch the blob URL directly instead of using base64
+        const response = await fetch(asset.uri);
+        const buffer = await response.arrayBuffer();
+        bytes = new Uint8Array(buffer);
+      } else {
+        if (!asset.base64) throw new Error('Could not read image data. Please try again.');
+        const binaryStr = atob(asset.base64);
+        bytes = new Uint8Array(binaryStr.length);
+        for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+      }
 
       const { error: uploadError } = await supabase.storage
         .from('avatars')
@@ -554,27 +565,27 @@ export default function ProfileScreen() {
 
         <TouchableOpacity
           style={styles.retakeBtn}
-          onPress={() =>
-            Alert.alert(
-              'Retake Placement Test',
-              'This will reset your current level and run you through the placement test again. Continue?',
-              [
-                { text: 'Cancel', style: 'cancel' },
-                {
-                  text: 'Retake',
-                  onPress: async () => {
-                    if (!profile?.id) return;
-                    await supabase
-                      .from('user_profiles')
-                      .update({ placement_score: null })
-                      .eq('id', profile.id);
-                    await fetchProfile(profile.id);
-                    // _layout.tsx will detect placement_score = null and route to the test
-                  },
-                },
-              ],
-            )
-          }
+          onPress={async () => {
+            const confirmed = Platform.OS === 'web'
+              ? window.confirm('This will reset your current level and run you through the placement test again. Continue?')
+              : await new Promise<boolean>((resolve) =>
+                  Alert.alert(
+                    'Retake Placement Test',
+                    'This will reset your current level and run you through the placement test again. Continue?',
+                    [
+                      { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+                      { text: 'Retake', onPress: () => resolve(true) },
+                    ],
+                  )
+                );
+            if (!confirmed || !profile?.id) return;
+            await supabase
+              .from('user_profiles')
+              .update({ placement_score: null })
+              .eq('id', profile.id);
+            await fetchProfile(profile.id);
+            // _layout.tsx will detect placement_score = null and route to the test
+          }}
         >
           <Ionicons name="reload-outline" size={18} color={Colors.primary} />
           <Text style={styles.retakeText}>Retake Placement Test</Text>
