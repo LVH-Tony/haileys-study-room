@@ -5,6 +5,7 @@ import {
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
+  Platform,
 } from 'react-native';
 import { useEffect } from 'react';
 import { useRouter } from 'expo-router';
@@ -29,13 +30,14 @@ export default function HomeScreen() {
     fetchAiSuggestion(profile.id);
     fetchSettings(profile.id);
     fetchWotd(profile.id);
-    // Boot notification channels and schedule if settings loaded
-    setupAndroidChannels();
+    if (Platform.OS !== 'web') {
+      setupAndroidChannels();
+    }
   }, [profile?.id]);
 
-  // Re-apply notification schedule whenever settings change
+  // Re-apply notification schedule whenever settings change (native only)
   useEffect(() => {
-    if (!settings) return;
+    if (!settings || Platform.OS === 'web') return;
     if (settings.reminder_enabled) {
       scheduleStudyReminders({
         enabled: true,
@@ -48,7 +50,7 @@ export default function HomeScreen() {
     }
     if (settings.wotd_enabled && wotd?.words?.word) {
       scheduleWotdNotification(wotd.words.word, 7, 0);
-      updateWidget(); // push fresh data to home screen widget
+      updateWidget();
     }
   }, [settings?.reminder_enabled, settings?.reminder_mode]);
 
