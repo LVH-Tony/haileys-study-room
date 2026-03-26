@@ -7,7 +7,6 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
-  Alert,
 } from 'react-native';
 import { useState } from 'react';
 import { Link } from 'expo-router';
@@ -21,16 +20,18 @@ export default function LoginScreen() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
 
   async function handleLogin() {
+    setErrorMsg('');
     if (!email || !password) {
-      Alert.alert('Missing fields', 'Please enter your email and password.');
+      setErrorMsg('Please enter your email and password.');
       return;
     }
     setLoading(true);
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     setLoading(false);
-    if (error) Alert.alert('Login failed', error.message);
+    if (error) setErrorMsg(error.message);
   }
 
   return (
@@ -68,6 +69,12 @@ export default function LoginScreen() {
             <Text style={styles.eyeText}>{showPassword ? '🙈' : '👁️'}</Text>
           </TouchableOpacity>
         </View>
+
+        {!!errorMsg && (
+          <View style={styles.errorBox}>
+            <Text style={styles.errorText}>⚠️ {errorMsg}</Text>
+          </View>
+        )}
 
         <TouchableOpacity style={styles.button} onPress={handleLogin} disabled={loading}>
           {loading ? (
@@ -168,5 +175,18 @@ const styles = StyleSheet.create({
     color: Colors.primary,
     fontWeight: FontWeight.semibold,
     fontSize: FontSize.base,
+  },
+  errorBox: {
+    backgroundColor: '#FFEBEE',
+    borderWidth: 1.5,
+    borderColor: '#EF9A9A',
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+  },
+  errorText: {
+    color: '#C62828',
+    fontSize: FontSize.sm,
+    lineHeight: 20,
   },
 });

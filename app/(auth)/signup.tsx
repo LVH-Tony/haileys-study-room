@@ -7,7 +7,6 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
-  Alert,
   ScrollView,
 } from 'react-native';
 import { useState } from 'react';
@@ -23,16 +22,18 @@ export default function SignupScreen() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
   const [pendingConfirmation, setPendingConfirmation] = useState(false);
   const router = useRouter();
 
   async function handleSignup() {
+    setErrorMsg('');
     if (!displayName || !email || !password) {
-      Alert.alert('Missing fields', 'Please fill in all fields.');
+      setErrorMsg('Please fill in all fields.');
       return;
     }
     if (password.length < 6) {
-      Alert.alert('Weak password', 'Password must be at least 6 characters.');
+      setErrorMsg('Password must be at least 6 characters.');
       return;
     }
     setLoading(true);
@@ -48,7 +49,7 @@ export default function SignupScreen() {
     setLoading(false);
 
     if (error || !data.user) {
-      Alert.alert('Sign up failed', error?.message ?? 'Something went wrong.');
+      setErrorMsg(error?.message ?? 'Something went wrong. Please try again.');
       return;
     }
 
@@ -118,6 +119,12 @@ export default function SignupScreen() {
             <Text style={styles.eyeText}>{showPassword ? '🙈' : '👁️'}</Text>
           </TouchableOpacity>
         </View>
+
+        {!!errorMsg && (
+          <View style={styles.errorBox}>
+            <Text style={styles.errorText}>⚠️ {errorMsg}</Text>
+          </View>
+        )}
 
         <TouchableOpacity style={styles.button} onPress={handleSignup} disabled={loading}>
           {loading ? (
@@ -253,7 +260,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 14,
   },
-  eyeText: {
-    fontSize: 18,
+  eyeText: { fontSize: 18 },
+  errorBox: {
+    backgroundColor: '#FFEBEE',
+    borderWidth: 1.5,
+    borderColor: '#EF9A9A',
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+  },
+  errorText: {
+    color: '#C62828',
+    fontSize: FontSize.sm,
+    lineHeight: 20,
   },
 });
