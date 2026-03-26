@@ -99,6 +99,7 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     paddingHorizontal: 28,
+    paddingBottom: '20%',
     gap: 14,
   },
   logo: {
