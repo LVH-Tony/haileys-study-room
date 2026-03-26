@@ -402,7 +402,7 @@ export default function PlacementTestScreen() {
         </TouchableOpacity>
 
         <Text style={styles.skipNote}>
-          You can retake this test anytime in Settings.
+          You can retake this test anytime in Profile.
         </Text>
       </View>
     );
