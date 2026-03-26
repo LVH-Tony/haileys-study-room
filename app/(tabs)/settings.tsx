@@ -580,10 +580,16 @@ export default function ProfileScreen() {
           <Text style={styles.retakeText}>Retake Placement Test</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.signOutBtn} onPress={() => Alert.alert('Sign out', 'Are you sure?', [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Sign out', style: 'destructive', onPress: signOut },
-        ])}>
+        <TouchableOpacity style={styles.signOutBtn} onPress={() => {
+          if (Platform.OS === 'web') {
+            if (window.confirm('Are you sure you want to sign out?')) signOut();
+          } else {
+            Alert.alert('Sign out', 'Are you sure?', [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Sign out', style: 'destructive', onPress: signOut },
+            ]);
+          }
+        }}>
           <Ionicons name="log-out-outline" size={18} color={Colors.error} />
           <Text style={styles.signOutText}>Sign out</Text>
         </TouchableOpacity>
