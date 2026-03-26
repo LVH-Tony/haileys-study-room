@@ -1,4 +1,4 @@
-export type DifficultyTier = 'beginner' | 'elementary' | 'pre-intermediate' | 'intermediate';
+export type DifficultyTier = 'beginner' | 'elementary' | 'pre-intermediate' | 'intermediate' | 'advanced';
 export type GameMode = 'picture_quiz' | 'word_quiz' | 'listen_pick';
 export type FeedbackRating = 'up' | 'down';
 
