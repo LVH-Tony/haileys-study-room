@@ -300,17 +300,32 @@ export default function ConversationScreen() {
     ]);
     setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
     setProcessing(false);
-    playTts(data.nextPrompt);
 
     if (data.sessionDone) {
       const didLevelUp = data.leveledUp ?? false;
       setLeveledUp(didLevelUp);
-      if (didLevelUp) playLevelUp(); else playSessionComplete();
       getUid().then((userId) => {
         if (userId && session) checkConvoAchievements(userId, session.level, didLevelUp).catch(() => {});
         if (userId) fetchLessonHistory(userId).catch(() => {});
       });
-      setTimeout(() => { setScreen('done'); loadAllProgress(); }, 2000);
+      // Let the user see and hear the AI's closing message before transitioning.
+      // Wait for TTS to finish, then pause 1.5s; fall back to 10s if TTS never fires onDone.
+      const finish = () => { if (didLevelUp) playLevelUp(); else playSessionComplete(); setTimeout(() => { setScreen('done'); loadAllProgress(); }, 1500); };
+      const fallback = setTimeout(finish, 10000);
+      try {
+        Speech.stop();
+        Speech.speak(data.nextPrompt, {
+          language: 'en-US',
+          rate: slowMode ? 0.5 : 0.9,
+          onDone: () => { clearTimeout(fallback); finish(); },
+          onError: () => { clearTimeout(fallback); finish(); },
+        });
+      } catch {
+        clearTimeout(fallback);
+        finish();
+      }
+    } else {
+      playTts(data.nextPrompt);
     }
   }
 
