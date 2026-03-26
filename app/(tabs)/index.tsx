@@ -12,13 +12,14 @@ import { useAuthStore } from '@/store/auth.store';
 import { useProgressStore } from '@/store/progress.store';
 import { useSettingsStore } from '@/store/settings.store';
 import { WotdCard } from '@/components/WotdCard';
+import { Logo } from '@/components/Logo';
 import { setupAndroidChannels, scheduleStudyReminders, scheduleWotdNotification } from '@/lib/notifications';
 import { updateWidget } from '@/widgets/widgetTaskHandler';
 import { Colors } from '@/constants/colors';
 import { FontSize, FontWeight } from '@/constants/typography';
 
 export default function HomeScreen() {
-  const { profile, signOut } = useAuthStore();
+  const { profile } = useAuthStore();
   const { aiSuggestion, fetchAiSuggestion, dismissSuggestion } = useProgressStore();
   const { settings, wotd, loading: wotdLoading, fetchSettings, fetchWotd, markWotdSeen } = useSettingsStore();
   const router = useRouter();
@@ -61,15 +62,18 @@ export default function HomeScreen() {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      {/* Greeting */}
-      <View style={styles.greetingRow}>
-        <View>
-          <Text style={styles.greeting}>Hello, {profile.display_name}! 👋</Text>
-          <Text style={styles.level}>{levelLabel(profile.starting_level)}</Text>
-        </View>
+      {/* Logo header */}
+      <View style={styles.logoRow}>
+        <Logo width={190} />
         <View style={styles.xpBadge}>
           <Text style={styles.xpText}>⭐ {profile.xp} XP</Text>
         </View>
+      </View>
+
+      {/* Greeting */}
+      <View>
+        <Text style={styles.greeting}>Hello, {profile.display_name}! 👋</Text>
+        <Text style={styles.level}>{levelLabel(profile.starting_level)}</Text>
       </View>
 
       {/* Streak */}
@@ -114,9 +118,6 @@ export default function HomeScreen() {
         />
       </View>
 
-      <TouchableOpacity style={styles.signOutBtn} onPress={signOut}>
-        <Text style={styles.signOutText}>Sign out</Text>
-      </TouchableOpacity>
     </ScrollView>
   );
 }
@@ -153,12 +154,13 @@ function levelLabel(level: string) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
-  content: { paddingHorizontal: 24, paddingTop: 60, paddingBottom: 40, gap: 20 },
+  content: { paddingHorizontal: 24, paddingTop: 56, paddingBottom: 40, gap: 20 },
   center: { flex: 1, backgroundColor: Colors.background, justifyContent: 'center', alignItems: 'center' },
-  greetingRow: {
+  logoRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'flex-start',
+    alignItems: 'center',
+    gap: 12,
   },
   greeting: {
     fontSize: FontSize.xl,
@@ -223,6 +225,4 @@ const styles = StyleSheet.create({
   actionEmoji: { fontSize: 28 },
   actionLabel: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.text },
   actionSub: { fontSize: FontSize.sm, color: Colors.textSecondary },
-  signOutBtn: { alignItems: 'center', marginTop: 12 },
-  signOutText: { fontSize: FontSize.sm, color: Colors.textMuted },
 });

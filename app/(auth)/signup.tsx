@@ -15,12 +15,15 @@ import { Link, useRouter } from 'expo-router';
 import { supabase } from '@/lib/supabase';
 import { Colors } from '@/constants/colors';
 import { FontSize, FontWeight } from '@/constants/typography';
+import { Logo } from '@/components/Logo';
 
 export default function SignupScreen() {
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [pendingConfirmation, setPendingConfirmation] = useState(false);
   const router = useRouter();
 
   async function handleSignup() {
@@ -34,27 +37,44 @@ export default function SignupScreen() {
     }
     setLoading(true);
 
-    const { data, error } = await supabase.auth.signUp({ email, password });
+    // Pass display_name in metadata — the DB trigger picks this up to create
+    // the user_profiles row server-side (works even before email confirmation).
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: { data: { display_name: displayName } },
+    });
+
+    setLoading(false);
+
     if (error || !data.user) {
-      setLoading(false);
       Alert.alert('Sign up failed', error?.message ?? 'Something went wrong.');
       return;
     }
 
-    // Create user profile row
-    await supabase.from('user_profiles').insert({
-      id: data.user.id,
-      display_name: displayName,
-      starting_level: 'beginner',
-      placement_score: null,
-      xp: 0,
-      streak_days: 0,
-      last_active_at: null,
-      is_premium: false,
-    });
+    if (!data.session) {
+      // Email confirmation is required — show a holding screen.
+      setPendingConfirmation(true);
+      return;
+    }
 
-    setLoading(false);
+    // Email confirmation is disabled; we have a live session — go straight in.
     router.replace('/(auth)/placement-test');
+  }
+
+  if (pendingConfirmation) {
+    return (
+      <View style={styles.center}>
+        <Text style={styles.confirmEmoji}>📬</Text>
+        <Text style={styles.confirmTitle}>Check your email</Text>
+        <Text style={styles.confirmBody}>
+          We sent a confirmation link to your email address. Open it on this device and you'll be taken straight to your placement test.
+        </Text>
+        <TouchableOpacity style={styles.secondaryButton} onPress={() => setPendingConfirmation(false)}>
+          <Text style={styles.secondaryButtonText}>Back to sign up</Text>
+        </TouchableOpacity>
+      </View>
+    );
   }
 
   return (
@@ -63,8 +83,8 @@ export default function SignupScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <ScrollView contentContainerStyle={styles.inner} keyboardShouldPersistTaps="handled">
-        <Text style={styles.title}>Create account</Text>
-        <Text style={styles.subtitle}>Let's find your starting level first</Text>
+        <Logo width={260} style={styles.logo} />
+        <Text style={styles.subtitle}>Create an account to start learning</Text>
 
         <TextInput
           style={styles.input}
@@ -78,18 +98,26 @@ export default function SignupScreen() {
           placeholder="Email"
           placeholderTextColor={Colors.textMuted}
           autoCapitalize="none"
+          autoCorrect={false}
           keyboardType="email-address"
           value={email}
           onChangeText={setEmail}
         />
-        <TextInput
-          style={styles.input}
-          placeholder="Password (min 6 characters)"
-          placeholderTextColor={Colors.textMuted}
-          secureTextEntry
-          value={password}
-          onChangeText={setPassword}
-        />
+        <View style={styles.passwordRow}>
+          <TextInput
+            style={styles.passwordInput}
+            placeholder="Password (min 6 characters)"
+            placeholderTextColor={Colors.textMuted}
+            autoCapitalize="none"
+            autoCorrect={false}
+            secureTextEntry={!showPassword}
+            value={password}
+            onChangeText={setPassword}
+          />
+          <TouchableOpacity style={styles.eyeButton} onPress={() => setShowPassword((v) => !v)}>
+            <Text style={styles.eyeText}>{showPassword ? '🙈' : '👁️'}</Text>
+          </TouchableOpacity>
+        </View>
 
         <TouchableOpacity style={styles.button} onPress={handleSignup} disabled={loading}>
           {loading ? (
@@ -124,10 +152,8 @@ const styles = StyleSheet.create({
     paddingVertical: 40,
     gap: 14,
   },
-  title: {
-    fontSize: FontSize['3xl'],
-    fontWeight: FontWeight.extrabold,
-    color: Colors.text,
+  logo: {
+    alignSelf: 'center',
     marginBottom: 4,
   },
   subtitle: {
@@ -170,5 +196,64 @@ const styles = StyleSheet.create({
     color: Colors.primary,
     fontWeight: FontWeight.semibold,
     fontSize: FontSize.base,
+  },
+  center: {
+    flex: 1,
+    backgroundColor: Colors.background,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 32,
+    gap: 16,
+  },
+  confirmEmoji: {
+    fontSize: 56,
+    marginBottom: 8,
+  },
+  confirmTitle: {
+    fontSize: FontSize['2xl'],
+    fontWeight: FontWeight.bold,
+    color: Colors.text,
+    textAlign: 'center',
+  },
+  confirmBody: {
+    fontSize: FontSize.base,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+    lineHeight: 24,
+  },
+  secondaryButton: {
+    marginTop: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: Colors.border,
+  },
+  secondaryButtonText: {
+    fontSize: FontSize.base,
+    fontWeight: FontWeight.semibold,
+    color: Colors.textSecondary,
+  },
+  passwordRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.surface,
+    borderWidth: 1.5,
+    borderColor: Colors.border,
+    borderRadius: 14,
+  },
+  passwordInput: {
+    flex: 1,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    fontSize: FontSize.base,
+    color: Colors.text,
+  },
+  eyeButton: {
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+  },
+  eyeText: {
+    fontSize: 18,
   },
 });

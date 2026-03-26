@@ -6,9 +6,11 @@ import {
   ActivityIndicator,
   TouchableOpacity,
 } from 'react-native';
-import { useEffect } from 'react';
+import { useCallback } from 'react';
+import { useFocusEffect } from 'expo-router';
 import { useAuthStore } from '@/store/auth.store';
 import { useProgressStore } from '@/store/progress.store';
+import type { ActivityItem } from '@/store/progress.store';
 import { Colors } from '@/constants/colors';
 import { FontSize, FontWeight } from '@/constants/typography';
 
@@ -21,15 +23,19 @@ const LEVEL_LABELS: Record<string, string> = {
 
 export default function ProgressScreen() {
   const { profile } = useAuthStore();
-  const { lessonHistory, aiSuggestion, fetchLessonHistory, fetchAiSuggestion, dismissSuggestion } =
+  const { lessonHistory, recentActivity, aiSuggestion, fetchLessonHistory, fetchAiSuggestion, dismissSuggestion } =
     useProgressStore();
 
-  useEffect(() => {
-    if (profile?.id) {
-      fetchLessonHistory(profile.id);
-      fetchAiSuggestion(profile.id);
-    }
-  }, [profile?.id]);
+  const profileId = profile?.id;
+  useFocusEffect(
+    useCallback(() => {
+      if (profileId) {
+        fetchLessonHistory(profileId);
+        fetchAiSuggestion(profileId);
+      }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [profileId, fetchLessonHistory, fetchAiSuggestion])
+  );
 
   if (!profile) {
     return (
@@ -42,6 +48,8 @@ export default function ProgressScreen() {
   const totalWords = lessonHistory.reduce((sum, l) => sum + l.total_questions, 0);
   const totalCorrect = lessonHistory.reduce((sum, l) => sum + l.score, 0);
   const accuracy = totalWords > 0 ? Math.round((totalCorrect / totalWords) * 100) : 0;
+  const totalSessions = recentActivity.length;
+  const convoSessions = recentActivity.filter((a) => a.type === 'conversation').length;
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
@@ -62,7 +70,8 @@ export default function ProgressScreen() {
       {/* Stats row */}
       <View style={styles.statsRow}>
         <StatCard label="🔥 Streak" value={`${profile.streak_days}d`} />
-        <StatCard label="📚 Sessions" value={String(lessonHistory.length)} />
+        <StatCard label="📚 Sessions" value={String(totalSessions)} />
+        <StatCard label="🎙️ Speaking" value={String(convoSessions)} />
         <StatCard label="🎯 Accuracy" value={`${accuracy}%`} />
       </View>
 
@@ -77,27 +86,29 @@ export default function ProgressScreen() {
         </View>
       )}
 
-      {/* Recent lessons */}
+      {/* Recent sessions — games + speaking combined */}
       <Text style={styles.sectionTitle}>Recent Sessions</Text>
-      {lessonHistory.length === 0 ? (
+      {recentActivity.length === 0 ? (
         <View style={styles.emptyCard}>
-          <Text style={styles.emptyText}>No sessions yet — start playing to see your history!</Text>
+          <Text style={styles.emptyText}>No sessions yet — start playing or speaking to see your history!</Text>
         </View>
       ) : (
         <View style={styles.historyList}>
-          {lessonHistory.slice(0, 10).map((lesson) => {
-            const pct = Math.round((lesson.score / lesson.total_questions) * 100);
+          {recentActivity.slice(0, 20).map((item) => {
+            const pct = item.total > 0 ? Math.round((item.score / item.total) * 100) : 0;
             return (
-              <View key={lesson.id} style={styles.historyItem}>
+              <View key={item.id} style={[styles.historyItem, item.type === 'conversation' && styles.historyItemConvo]}>
                 <View style={styles.historyMeta}>
-                  <Text style={styles.historyMode}>{modeLabel(lesson.mode)}</Text>
-                  <Text style={styles.historyDate}>
-                    {new Date(lesson.completed_at).toLocaleDateString()}
-                  </Text>
+                  <Text style={styles.historyMode} numberOfLines={2}>{item.label}</Text>
+                  <View style={styles.historyBottom}>
+                    <Text style={styles.historyDate}>
+                      {new Date(item.completed_at).toLocaleDateString()}
+                    </Text>
+                    <Text style={[styles.historyScore, pct >= 80 && { color: Colors.success }]}>
+                      {item.score}/{item.total} · {pct}%
+                    </Text>
+                  </View>
                 </View>
-                <Text style={[styles.historyScore, pct >= 80 && { color: Colors.success }]}>
-                  {lesson.score}/{lesson.total_questions} ({pct}%)
-                </Text>
               </View>
             );
           })}
@@ -114,15 +125,6 @@ function StatCard({ label, value }: { label: string; value: string }) {
       <Text style={styles.statLabel}>{label}</Text>
     </View>
   );
-}
-
-function modeLabel(mode: string) {
-  const map: Record<string, string> = {
-    picture_quiz: '🖼️ Picture Quiz',
-    word_quiz: '📝 Word Quiz',
-    listen_pick: '🔊 Listen & Pick',
-  };
-  return map[mode] ?? mode;
 }
 
 const styles = StyleSheet.create({
@@ -151,12 +153,13 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   xpText: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.primaryDark },
-  statsRow: { flexDirection: 'row', gap: 12 },
+  statsRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
   statCard: {
     flex: 1,
+    minWidth: '20%',
     backgroundColor: Colors.surface,
     borderRadius: 16,
-    padding: 16,
+    padding: 12,
     alignItems: 'center',
     borderWidth: 1.5,
     borderColor: Colors.border,
@@ -190,14 +193,16 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.surface,
     borderRadius: 14,
     padding: 14,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
     borderWidth: 1,
     borderColor: Colors.border,
   },
-  historyMeta: { gap: 2 },
-  historyMode: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.text },
+  historyItemConvo: {
+    borderColor: '#9C27B0' + '55',
+    backgroundColor: '#F3E5F5' + '88',
+  },
+  historyMeta: { gap: 4, flex: 1 },
+  historyMode: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.text },
+  historyBottom: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 2 },
   historyDate: { fontSize: FontSize.xs, color: Colors.textMuted },
-  historyScore: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.textSecondary },
+  historyScore: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.textSecondary },
 });

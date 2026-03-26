@@ -1,6 +1,7 @@
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import { Platform } from 'react-native';
+import { supabase } from './supabase';
 
 export type ReminderWindow = 'morning' | 'afternoon' | 'evening';
 
@@ -21,13 +22,21 @@ Notifications.setNotificationHandler({
 });
 
 export async function requestNotificationPermissions(): Promise<boolean> {
-  if (!Device.isDevice) return false;
-
   const { status: existing } = await Notifications.getPermissionsAsync();
   if (existing === 'granted') return true;
-
   const { status } = await Notifications.requestPermissionsAsync();
   return status === 'granted';
+}
+
+/** Get the Expo push token and save it to the user's profile (for nudges). */
+export async function registerPushToken(userId: string): Promise<void> {
+  try {
+    const granted = await requestNotificationPermissions();
+    if (!granted) return;
+    const { data: token } = await Notifications.getExpoPushTokenAsync();
+    if (!token) return;
+    await supabase.from('user_profiles').update({ push_token: token }).eq('id', userId);
+  } catch { /* ignore — push token not critical */ }
 }
 
 export async function scheduleStudyReminders(options: {

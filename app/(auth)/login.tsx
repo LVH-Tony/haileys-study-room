@@ -14,10 +14,12 @@ import { Link } from 'expo-router';
 import { supabase } from '@/lib/supabase';
 import { Colors } from '@/constants/colors';
 import { FontSize, FontWeight } from '@/constants/typography';
+import { Logo } from '@/components/Logo';
 
 export default function LoginScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
 
   async function handleLogin() {
@@ -37,7 +39,7 @@ export default function LoginScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <View style={styles.inner}>
-        <Text style={styles.title}>Welcome back!</Text>
+        <Logo width={260} style={styles.logo} />
         <Text style={styles.subtitle}>Sign in to continue learning</Text>
 
         <TextInput
@@ -45,18 +47,27 @@ export default function LoginScreen() {
           placeholder="Email"
           placeholderTextColor={Colors.textMuted}
           autoCapitalize="none"
+          autoCorrect={false}
           keyboardType="email-address"
           value={email}
           onChangeText={setEmail}
         />
-        <TextInput
-          style={styles.input}
-          placeholder="Password"
-          placeholderTextColor={Colors.textMuted}
-          secureTextEntry
-          value={password}
-          onChangeText={setPassword}
-        />
+
+        <View style={styles.passwordRow}>
+          <TextInput
+            style={styles.passwordInput}
+            placeholder="Password"
+            placeholderTextColor={Colors.textMuted}
+            autoCapitalize="none"
+            autoCorrect={false}
+            secureTextEntry={!showPassword}
+            value={password}
+            onChangeText={setPassword}
+          />
+          <TouchableOpacity style={styles.eyeButton} onPress={() => setShowPassword((v) => !v)}>
+            <Text style={styles.eyeText}>{showPassword ? '🙈' : '👁️'}</Text>
+          </TouchableOpacity>
+        </View>
 
         <TouchableOpacity style={styles.button} onPress={handleLogin} disabled={loading}>
           {loading ? (
@@ -90,10 +101,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 28,
     gap: 14,
   },
-  title: {
-    fontSize: FontSize['3xl'],
-    fontWeight: FontWeight.extrabold,
-    color: Colors.text,
+  logo: {
+    alignSelf: 'center',
     marginBottom: 4,
   },
   subtitle: {
@@ -110,6 +119,28 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     fontSize: FontSize.base,
     color: Colors.text,
+  },
+  passwordRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.surface,
+    borderWidth: 1.5,
+    borderColor: Colors.border,
+    borderRadius: 14,
+  },
+  passwordInput: {
+    flex: 1,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    fontSize: FontSize.base,
+    color: Colors.text,
+  },
+  eyeButton: {
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+  },
+  eyeText: {
+    fontSize: 18,
   },
   button: {
     backgroundColor: Colors.primary,

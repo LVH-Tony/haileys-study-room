@@ -1,14 +1,14 @@
 {
   "expo": {
-    "name": "Hailey's Study Room",
+    "name": "Hailey's",
     "slug": "haileys-study-room",
     "version": "1.0.0",
     "scheme": "haileys-study-room",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/icon-fixed.png",
     "userInterfaceStyle": "light",
     "splash": {
-      "image": "./assets/splash-icon.png",
+      "image": "./assets/big logo.png",
       "resizeMode": "contain",
       "backgroundColor": "#F5ECD7"
     },
@@ -18,8 +18,9 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#F5ECD7"
+        "foregroundImage": "./assets/icon-foreground.png",
+        "backgroundImage": "./assets/icon-background.png",
+        "monochromeImage": "./assets/icon-monocrhome.png"
       },
       "package": "com.lvhtony.haileysStudyRoom",
       "permissions": [
@@ -37,6 +38,12 @@
       "expo-secure-store",
       "./plugins/withStudyRoomWidget",
       [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Hailey's to access your photos to set a profile picture."
+        }
+      ],
+      [
         "expo-av",
         {
           "microphonePermission": "Allow Hailey's Study Room to access your microphone for speaking practice."
@@ -45,7 +52,7 @@
       [
         "expo-notifications",
         {
-          "icon": "./assets/icon.png",
+          "icon": "./assets/icon-foreground.png",
           "color": "#E07B39",
           "defaultChannel": "study-reminders",
           "sounds": []

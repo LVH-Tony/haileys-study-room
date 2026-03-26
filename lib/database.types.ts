@@ -17,9 +17,13 @@ export interface Word {
   word: string;
   image_url: string | null;
   audio_url: string | null;
+  definition: string | null;
   difficulty_score: number; // 1–5
   created_at: string;
 }
+
+export type AgeGroup = 'kid' | 'teen' | 'adult';
+export type LearningGoal = 'fun' | 'travel' | 'school' | 'career';
 
 export interface UserProfile {
   id: string;
@@ -31,6 +35,36 @@ export interface UserProfile {
   last_active_at: string | null;
   is_premium: boolean;
   created_at: string;
+  // Extended profile fields
+  age_group: AgeGroup | null;
+  native_language: string;
+  learning_goal: LearningGoal | null;
+  daily_goal_minutes: number;
+  avatar_url: string | null;
+  onboarding_completed: boolean;
+  user_code: string | null;
+  push_token: string | null;
+  convo_level: number; // 1=Beginner, 2=Elementary, 3=Pre-Intermediate
+}
+
+export interface Friendship {
+  id: string;
+  requester_id: string;
+  addressee_id: string;
+  status: 'pending' | 'accepted' | 'blocked';
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LeaderboardEntry {
+  id: string;
+  display_name: string;
+  avatar_url: string | null;
+  user_code: string | null;
+  xp: number;
+  streak_days: number;
+  rank: number;
+  is_self?: boolean;
 }
 
 export interface UserWordStat {

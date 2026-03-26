@@ -8,16 +8,21 @@ import {
   ScrollView,
   Modal,
   Pressable,
+  Animated,
 } from 'react-native';
 import { useEffect, useState, useRef } from 'react';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Image } from 'expo-image';
 import { Audio } from 'expo-av';
+import * as Speech from 'expo-speech';
+import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/store/auth.store';
 import { Colors } from '@/constants/colors';
 import { FontSize, FontWeight } from '@/constants/typography';
 import { nextInterval, nextReviewDate } from '@/lib/spaced-repetition';
+import { playCorrect, playWrong, playComplete } from '@/lib/sounds';
+import { checkGameAchievements } from '@/lib/achievements';
 import type { Word, GameMode } from '@/lib/database.types';
 
 const ROUND_SIZE = 5;
@@ -28,19 +33,31 @@ interface GameQuestion {
   imageOptions: Word[];
 }
 
-// ─── Floating Feedback Button + Sheet ───────────────────────────────────────
-function FeedbackSheet({
-  visible,
-  onClose,
-  onRate,
-  submitted,
-  wordLabel,
-}: {
-  visible: boolean;
-  onClose: () => void;
-  onRate: (r: 'up' | 'down') => void;
-  submitted: boolean;
-  wordLabel: string;
+// ─── Achievement Toast ────────────────────────────────────────────────────────
+function AchievementToast({ visible, text }: { visible: boolean; text: string }) {
+  const opacity = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (visible) {
+      Animated.sequence([
+        Animated.timing(opacity, { toValue: 1, duration: 300, useNativeDriver: true }),
+        Animated.delay(2500),
+        Animated.timing(opacity, { toValue: 0, duration: 300, useNativeDriver: true }),
+      ]).start();
+    }
+  }, [visible, text]);
+
+  if (!visible) return null;
+  return (
+    <Animated.View style={[toast.container, { opacity }]}>
+      <Text style={toast.text}>🏅 {text}</Text>
+    </Animated.View>
+  );
+}
+
+// ─── Feedback Sheet ───────────────────────────────────────────────────────────
+function FeedbackSheet({ visible, onClose, onRate, submitted, wordLabel }: {
+  visible: boolean; onClose: () => void; onRate: (r: 'up' | 'down') => void;
+  submitted: boolean; wordLabel: string;
 }) {
   return (
     <Modal transparent animationType="slide" visible={visible} onRequestClose={onClose}>
@@ -73,26 +90,44 @@ function FeedbackSheet({
   );
 }
 
-// ─── Main Screen ─────────────────────────────────────────────────────────────
+// ─── Main Screen ──────────────────────────────────────────────────────────────
 export default function GameScreen() {
   const { topicId, mode } = useLocalSearchParams<{ topicId: string; mode: GameMode }>();
   const router = useRouter();
   const { session } = useAuthStore();
 
-  const [questions, setQuestions] = useState<GameQuestion[]>([]);
+  const [questions, setQuestions]   = useState<GameQuestion[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [selected, setSelected] = useState<string | null>(null);
-  const [score, setScore] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [done, setDone] = useState(false);
+  const [selected, setSelected]     = useState<string | null>(null);
+  const [score, setScore]           = useState(0);
+  const [loading, setLoading]       = useState(true);
+  const [done, setDone]             = useState(false);
+  const [muted, setMuted]           = useState(false);
 
-  // Feedback sheet state
-  const [feedbackVisible, setFeedbackVisible] = useState(false);
+  // Definition card
+  const [shownDef, setShownDef]     = useState<{ correct: Word; chosen: Word | null } | null>(null);
+
+  // Achievement toast
+  const [toastText, setToastText]   = useState('');
+  const [toastVisible, setToastVisible] = useState(false);
+
+  // Feedback
+  const [feedbackVisible, setFeedbackVisible]   = useState(false);
   const [feedbackSubmitted, setFeedbackSubmitted] = useState(false);
-  // Track which question index feedback was last submitted for (avoid double-submit)
   const [feedbackForIndex, setFeedbackForIndex] = useState<number | null>(null);
 
   const soundRef = useRef<Audio.Sound | null>(null);
+
+  // Listen for achievement unlocks
+  useEffect(() => {
+    const originalPlay = globalThis.__onAchievement;
+    globalThis.__onAchievementUnlocked = (title: string) => {
+      setToastText(`Achievement: ${title}`);
+      setToastVisible(true);
+      setTimeout(() => setToastVisible(false), 3200);
+    };
+    return () => { globalThis.__onAchievementUnlocked = originalPlay; };
+  }, []);
 
   useEffect(() => {
     buildQuestions();
@@ -104,7 +139,7 @@ export default function GameScreen() {
       .from('words').select('*').eq('topic_id', topicId).order('difficulty_score');
 
     const { data: allWords } = await supabase
-      .from('words').select('id, word, image_url, topic_id, difficulty_score, audio_url')
+      .from('words').select('id, word, image_url, topic_id, difficulty_score, audio_url, definition')
       .neq('topic_id', topicId).limit(60);
 
     if (!topicWords || topicWords.length < ROUND_SIZE) {
@@ -130,27 +165,32 @@ export default function GameScreen() {
     setQuestions(built);
     setLoading(false);
 
-    if ((mode === 'listen_pick' || mode === 'picture_quiz') && built.length > 0) {
+    if (!muted && (mode === 'listen_pick' || mode === 'picture_quiz') && built.length > 0) {
       await playWordAudio(built[0].targetWord);
     }
   }
 
   async function playWordAudio(word: Word) {
+    if (muted) return;
     try {
-      soundRef.current?.unloadAsync();
+      await Audio.setAudioModeAsync({ playsInSilentModeIOS: true, staysActiveInBackground: false, shouldDuckAndroid: true });
       if (word.audio_url) {
+        soundRef.current?.unloadAsync();
         const { sound } = await Audio.Sound.createAsync({ uri: word.audio_url });
         soundRef.current = sound;
         await sound.playAsync();
       } else {
-        const { data } = await supabase.functions.invoke('tts', { body: { text: word.word } });
-        if (data?.audioUrl) {
-          const { sound } = await Audio.Sound.createAsync({ uri: data.audioUrl });
-          soundRef.current = sound;
-          await sound.playAsync();
-        }
+        Speech.stop();
+        Speech.speak(word.word, { language: 'en-US', rate: 0.85, pitch: 1.0 });
       }
-    } catch { /* non-fatal */ }
+    } catch {
+      try { Speech.speak(word.word, { language: 'en-US', rate: 0.85 }); } catch { /* ignore */ }
+    }
+  }
+
+  function speakText(text: string) {
+    if (muted) return;
+    try { Speech.stop(); Speech.speak(text, { language: 'en-US', rate: 0.85 }); } catch { /* ignore */ }
   }
 
   async function handleSelect(answer: string) {
@@ -159,18 +199,29 @@ export default function GameScreen() {
 
     const current = questions[currentIndex];
     const isCorrect = answer === current.targetWord.word;
-    if (isCorrect) setScore((s) => s + 1);
+    if (isCorrect) {
+      setScore((s) => s + 1);
+      if (!muted) playCorrect();
+    } else {
+      if (!muted) playWrong();
+    }
+
+    // Show definition card
+    const chosenWord = current.imageOptions.find((w) => w.word === answer) ??
+      current.options.includes(answer) ? ({ word: answer } as Word) : null;
+    setShownDef({ correct: current.targetWord, chosen: answer !== current.targetWord.word ? (chosenWord ?? null) : null });
 
     if (session) await updateWordStat(current.targetWord.id, isCorrect);
-    // No auto-advance — user taps "Next" to continue
   }
 
   async function handleNext() {
+    setShownDef(null);
     const isLast = currentIndex + 1 >= questions.length;
-    const finalScore = score; // already updated by handleSelect
+    const newScore = score;
 
     if (isLast) {
-      await saveSession(finalScore);
+      await saveSession(newScore);
+      if (!muted) playComplete();
       setDone(true);
     } else {
       setCurrentIndex((i) => i + 1);
@@ -213,53 +264,44 @@ export default function GameScreen() {
       score: finalScore, total_questions: ROUND_SIZE, completed_at: new Date().toISOString(),
     });
     await supabase.rpc('increment_xp', { p_user_id: session.user.id, p_amount: finalScore * 10 });
-  }
-
-  function openFeedback() {
-    setFeedbackSubmitted(false);
-    setFeedbackVisible(true);
+    // Check achievements async (don't await — don't block UI)
+    checkGameAchievements(session.user.id, finalScore, ROUND_SIZE).catch(() => {});
   }
 
   async function handleRate(rating: 'up' | 'down') {
     if (!session) return;
-    // On results screen feedback on the whole session (use last question's word as ref)
     const refIndex = done ? questions.length - 1 : currentIndex;
     const wordId = questions[refIndex]?.targetWord.id;
     if (!wordId || feedbackForIndex === refIndex) {
-      // Already submitted for this question — just close
       setFeedbackSubmitted(true);
       setTimeout(() => setFeedbackVisible(false), 1200);
       return;
     }
-    await supabase.from('feedback').insert({
-      user_id: session.user.id, ref_type: 'word', ref_id: wordId, rating,
-    });
+    await supabase.from('feedback').insert({ user_id: session.user.id, ref_type: 'word', ref_id: wordId, rating });
     setFeedbackForIndex(refIndex);
     setFeedbackSubmitted(true);
     setTimeout(() => setFeedbackVisible(false), 1200);
   }
 
-  // ── Loading ──────────────────────────────────────────────────────────────
-  if (loading) {
-    return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color={Colors.primary} />
-      </View>
-    );
-  }
+  // ── Loading ─────────────────────────────────────────────────────────────────
+  if (loading) return <View style={styles.center}><ActivityIndicator size="large" color={Colors.primary} /></View>;
 
-  // ── Results screen ───────────────────────────────────────────────────────
+  // ── Results screen ──────────────────────────────────────────────────────────
   if (done) {
     const pct = Math.round((score / ROUND_SIZE) * 100);
     return (
       <View style={styles.container}>
+        <AchievementToast visible={toastVisible} text={toastText} />
         <View style={styles.center}>
           <Text style={styles.resultEmoji}>{pct >= 80 ? '🎉' : pct >= 50 ? '👍' : '💪'}</Text>
           <Text style={styles.resultTitle}>{score} / {ROUND_SIZE} correct</Text>
-          <Text style={styles.resultSub}>
-            {pct >= 80 ? 'Excellent work!' : pct >= 50 ? 'Good effort!' : 'Keep practicing!'}
-          </Text>
+          <Text style={styles.resultSub}>{pct >= 80 ? 'Excellent work!' : pct >= 50 ? 'Good effort!' : 'Keep practicing!'}</Text>
           <Text style={styles.xpEarned}>+{score * 10} XP earned</Text>
+
+          <View style={styles.scoreBar}>
+            <View style={[styles.scoreBarFill, { width: `${pct}%` as any, backgroundColor: pct >= 80 ? Colors.success : pct >= 50 ? Colors.warning : Colors.error }]} />
+          </View>
+
           <TouchableOpacity style={styles.button} onPress={() => router.back()}>
             <Text style={styles.buttonText}>Back to Topics</Text>
           </TouchableOpacity>
@@ -267,28 +309,20 @@ export default function GameScreen() {
             style={[styles.button, styles.outlineButton]}
             onPress={() => {
               setCurrentIndex(0); setScore(0); setSelected(null);
-              setDone(false); setFeedbackSubmitted(false); setFeedbackForIndex(null);
+              setDone(false); setShownDef(null); setFeedbackSubmitted(false); setFeedbackForIndex(null);
               setLoading(true); buildQuestions();
             }}
           >
             <Text style={[styles.buttonText, { color: Colors.text }]}>Play again</Text>
           </TouchableOpacity>
         </View>
-
-        {/* Floating feedback button — available on results too */}
-        <FloatingFeedbackButton onPress={openFeedback} />
-        <FeedbackSheet
-          visible={feedbackVisible}
-          onClose={() => setFeedbackVisible(false)}
-          onRate={handleRate}
-          submitted={feedbackSubmitted}
-          wordLabel={questions[questions.length - 1]?.targetWord.word ?? ''}
-        />
+        <FloatingFeedbackButton onPress={() => { setFeedbackSubmitted(false); setFeedbackVisible(true); }} />
+        <FeedbackSheet visible={feedbackVisible} onClose={() => setFeedbackVisible(false)} onRate={handleRate} submitted={feedbackSubmitted} wordLabel={questions[questions.length - 1]?.targetWord.word ?? ''} />
       </View>
     );
   }
 
-  // ── Game screen ──────────────────────────────────────────────────────────
+  // ── Game screen ─────────────────────────────────────────────────────────────
   const current = questions[currentIndex];
   const isLastQuestion = currentIndex + 1 >= questions.length;
   const progress = (currentIndex / ROUND_SIZE) * 100;
@@ -297,13 +331,23 @@ export default function GameScreen() {
 
   return (
     <View style={styles.container}>
+      <AchievementToast visible={toastVisible} text={toastText} />
+
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()}>
           <Text style={styles.back}>← Back</Text>
         </TouchableOpacity>
         <Text style={styles.counter}>{currentIndex + 1} / {ROUND_SIZE}</Text>
-        <Text style={styles.scoreText}>⭐ {score}</Text>
+        <View style={styles.headerRight}>
+          <Text style={styles.scoreText}>⭐ {score}</Text>
+          {/* Mute toggle — only for picture_quiz */}
+          {mode === 'picture_quiz' && (
+            <TouchableOpacity onPress={() => setMuted((m) => !m)} style={styles.muteBtn}>
+              <Ionicons name={muted ? 'volume-mute' : 'volume-high'} size={20} color={muted ? Colors.textMuted : Colors.primary} />
+            </TouchableOpacity>
+          )}
+        </View>
       </View>
 
       {/* Progress bar */}
@@ -316,9 +360,9 @@ export default function GameScreen() {
         {mode === 'picture_quiz' && (
           <>
             <Text style={styles.instruction}>Which picture matches the word?</Text>
-            <TouchableOpacity onPress={() => playWordAudio(current.targetWord)} style={styles.wordSpeakRow}>
+            <TouchableOpacity onPress={() => playWordAudio(current.targetWord)} style={styles.wordSpeakRow} disabled={muted}>
               <Text style={styles.wordDisplay}>{current.targetWord.word}</Text>
-              <Text style={styles.speakIcon}>🔊</Text>
+              <Ionicons name={muted ? 'volume-mute' : 'volume-high'} size={22} color={muted ? Colors.textMuted : Colors.primary} />
             </TouchableOpacity>
             <View style={styles.imageGrid}>
               {current.imageOptions.map((opt) => {
@@ -329,18 +373,12 @@ export default function GameScreen() {
                 if (isOpt && !isOptCorrect) borderColor = Colors.error;
                 if (isAnswered && !isOpt && isOptCorrect) borderColor = Colors.success;
                 return (
-                  <TouchableOpacity
-                    key={opt.id}
-                    style={[styles.imageOption, { borderColor }]}
-                    onPress={() => handleSelect(opt.word)}
-                    disabled={isAnswered}
-                  >
+                  <TouchableOpacity key={opt.id} style={[styles.imageOption, { borderColor }]} onPress={() => handleSelect(opt.word)} disabled={isAnswered}>
                     {opt.image_url
                       ? <Image source={{ uri: opt.image_url }} style={styles.optionImage} contentFit="cover" />
-                      : <View style={[styles.optionImage, styles.imagePlaceholder]}>
-                          <Text style={styles.placeholderText}>{opt.word}</Text>
-                        </View>
+                      : <View style={[styles.optionImage, styles.imagePlaceholder]}><Text style={styles.placeholderText}>{opt.word}</Text></View>
                     }
+                    {isAnswered && <Text style={styles.imageLabel}>{opt.word}</Text>}
                   </TouchableOpacity>
                 );
               })}
@@ -354,14 +392,9 @@ export default function GameScreen() {
             <Text style={styles.instruction}>What word matches this picture?</Text>
             {current.targetWord.image_url
               ? <Image source={{ uri: current.targetWord.image_url }} style={styles.mainImage} contentFit="cover" />
-              : <View style={[styles.mainImage, styles.imagePlaceholder]}>
-                  <Text style={styles.placeholderText}>{current.targetWord.word}</Text>
-                </View>
+              : <View style={[styles.mainImage, styles.imagePlaceholder]}><Text style={styles.placeholderText}>{current.targetWord.word}</Text></View>
             }
-            <WordOptions
-              options={current.options} selected={selected}
-              correct={current.targetWord.word} onSelect={handleSelect} disabled={isAnswered}
-            />
+            <WordOptions options={current.options} selected={selected} correct={current.targetWord.word} onSelect={handleSelect} disabled={isAnswered} />
           </>
         )}
 
@@ -373,52 +406,103 @@ export default function GameScreen() {
               <Text style={styles.listenEmoji}>🔊</Text>
               <Text style={styles.listenLabel}>Tap to hear again</Text>
             </TouchableOpacity>
-            <WordOptions
-              options={current.options} selected={selected}
-              correct={current.targetWord.word} onSelect={handleSelect} disabled={isAnswered}
-            />
+            <WordOptions options={current.options} selected={selected} correct={current.targetWord.word} onSelect={handleSelect} disabled={isAnswered} />
           </>
         )}
 
-        {/* ── Result banner + Next button ── */}
+        {/* ── Definition card + Result banner ── */}
         {isAnswered && (
-          <View style={[styles.resultBanner, isCorrect ? styles.correctBanner : styles.wrongBanner]}>
-            <Text style={styles.resultBannerEmoji}>{isCorrect ? '✓' : '✗'}</Text>
-            <View style={styles.resultBannerText}>
-              <Text style={[styles.resultBannerTitle, { color: isCorrect ? Colors.success : Colors.error }]}>
-                {isCorrect ? 'Correct!' : 'Not quite'}
-              </Text>
-              {!isCorrect && (
-                <Text style={styles.resultBannerSub}>
-                  Answer: <Text style={{ fontWeight: FontWeight.bold }}>{current.targetWord.word}</Text>
+          <>
+            {/* Result banner */}
+            <View style={[styles.resultBanner, isCorrect ? styles.correctBanner : styles.wrongBanner]}>
+              <Text style={styles.resultBannerEmoji}>{isCorrect ? '✓' : '✗'}</Text>
+              <View style={styles.resultBannerText}>
+                <Text style={[styles.resultBannerTitle, { color: isCorrect ? Colors.success : Colors.error }]}>
+                  {isCorrect ? 'Correct!' : 'Not quite'}
                 </Text>
-              )}
+                {!isCorrect && (
+                  <Text style={styles.resultBannerSub}>
+                    Answer: <Text style={{ fontWeight: FontWeight.bold }}>{current.targetWord.word}</Text>
+                  </Text>
+                )}
+              </View>
+              <TouchableOpacity style={styles.nextBtn} onPress={handleNext}>
+                <Text style={styles.nextBtnText}>{isLastQuestion ? 'Finish 🎉' : 'Next →'}</Text>
+              </TouchableOpacity>
             </View>
-            <TouchableOpacity style={styles.nextBtn} onPress={handleNext}>
-              <Text style={styles.nextBtnText}>{isLastQuestion ? 'Finish' : 'Next →'}</Text>
-            </TouchableOpacity>
-          </View>
+
+            {/* Definition card */}
+            <DefinitionCard
+              correct={shownDef?.correct ?? current.targetWord}
+              chosen={shownDef?.chosen ?? null}
+              isCorrect={isCorrect}
+              onSpeak={speakText}
+              muted={muted}
+            />
+          </>
         )}
       </ScrollView>
 
-      {/* Floating feedback button — always visible */}
-      <FloatingFeedbackButton onPress={openFeedback} />
-
-      <FeedbackSheet
-        visible={feedbackVisible}
-        onClose={() => setFeedbackVisible(false)}
-        onRate={handleRate}
-        submitted={feedbackSubmitted}
-        wordLabel={current.targetWord.word}
-      />
+      <FloatingFeedbackButton onPress={() => { setFeedbackSubmitted(false); setFeedbackVisible(true); }} />
+      <FeedbackSheet visible={feedbackVisible} onClose={() => setFeedbackVisible(false)} onRate={handleRate} submitted={feedbackSubmitted} wordLabel={current.targetWord.word} />
     </View>
   );
 }
 
-// ── Shared word options component ────────────────────────────────────────────
-function WordOptions({
-  options, selected, correct, onSelect, disabled,
-}: {
+// ── Definition Card ───────────────────────────────────────────────────────────
+function DefinitionCard({ correct, chosen, isCorrect, onSpeak, muted }: {
+  correct: Word; chosen: Word | null; isCorrect: boolean; onSpeak: (t: string) => void; muted: boolean;
+}) {
+  return (
+    <View style={defStyles.card}>
+      <Text style={defStyles.cardTitle}>📖 Word Info</Text>
+
+      {/* Correct word */}
+      <View style={defStyles.wordRow}>
+        <View style={defStyles.wordLeft}>
+          <Text style={defStyles.wordLabel}>✓ <Text style={defStyles.wordName}>{correct.word}</Text></Text>
+          {correct.definition
+            ? <Text style={defStyles.definition}>{correct.definition}</Text>
+            : <Text style={defStyles.definitionPlaceholder}>No definition yet</Text>
+          }
+        </View>
+        <TouchableOpacity
+          style={[defStyles.speakBtn, muted && defStyles.speakBtnMuted]}
+          onPress={() => onSpeak(correct.definition ? `${correct.word}. ${correct.definition}` : correct.word)}
+          disabled={muted}
+        >
+          <Ionicons name={muted ? 'volume-mute' : 'volume-high'} size={16} color={muted ? Colors.textMuted : Colors.primary} />
+        </TouchableOpacity>
+      </View>
+
+      {/* Chosen word (if wrong) */}
+      {!isCorrect && chosen && chosen.word !== correct.word && (
+        <>
+          <View style={defStyles.divider} />
+          <View style={defStyles.wordRow}>
+            <View style={defStyles.wordLeft}>
+              <Text style={defStyles.wordLabel}>✗ <Text style={[defStyles.wordName, { color: Colors.error }]}>{chosen.word}</Text></Text>
+              {(chosen as any).definition
+                ? <Text style={defStyles.definition}>{(chosen as any).definition}</Text>
+                : <Text style={defStyles.definitionPlaceholder}>No definition yet</Text>
+              }
+            </View>
+            <TouchableOpacity
+              style={[defStyles.speakBtn, muted && defStyles.speakBtnMuted]}
+              onPress={() => onSpeak((chosen as any).definition ? `${chosen.word}. ${(chosen as any).definition}` : chosen.word)}
+              disabled={muted}
+            >
+              <Ionicons name={muted ? 'volume-mute' : 'volume-high'} size={16} color={muted ? Colors.textMuted : Colors.error} />
+            </TouchableOpacity>
+          </View>
+        </>
+      )}
+    </View>
+  );
+}
+
+// ── Word Options ──────────────────────────────────────────────────────────────
+function WordOptions({ options, selected, correct, onSelect, disabled }: {
   options: string[]; selected: string | null; correct: string;
   onSelect: (o: string) => void; disabled: boolean;
 }) {
@@ -426,19 +510,13 @@ function WordOptions({
     <View style={styles.wordOptions}>
       {options.map((opt) => {
         const isSelected = selected === opt;
-        const isCorrect = opt === correct;
-        let bg = Colors.surface;
-        let border = Colors.border;
-        if (isSelected && isCorrect) { bg = Colors.successLight; border = Colors.success; }
-        if (isSelected && !isCorrect) { bg = Colors.errorLight; border = Colors.error; }
-        if (disabled && !isSelected && isCorrect) { bg = Colors.successLight; border = Colors.success; }
+        const isOpt = opt === correct;
+        let bg = Colors.surface, border = Colors.border;
+        if (isSelected && isOpt)   { bg = Colors.successLight; border = Colors.success; }
+        if (isSelected && !isOpt)  { bg = Colors.errorLight;   border = Colors.error; }
+        if (disabled && !isSelected && isOpt) { bg = Colors.successLight; border = Colors.success; }
         return (
-          <TouchableOpacity
-            key={opt}
-            style={[styles.wordOption, { backgroundColor: bg, borderColor: border }]}
-            onPress={() => onSelect(opt)}
-            disabled={disabled}
-          >
+          <TouchableOpacity key={opt} style={[styles.wordOption, { backgroundColor: bg, borderColor: border }]} onPress={() => onSelect(opt)} disabled={disabled}>
             <Text style={styles.wordOptionText}>{opt}</Text>
           </TouchableOpacity>
         );
@@ -447,7 +525,7 @@ function WordOptions({
   );
 }
 
-// ── Floating button ───────────────────────────────────────────────────────────
+// ── Floating Feedback ─────────────────────────────────────────────────────────
 function FloatingFeedbackButton({ onPress }: { onPress: () => void }) {
   return (
     <TouchableOpacity style={fab.btn} onPress={onPress} activeOpacity={0.8}>
@@ -459,131 +537,89 @@ function FloatingFeedbackButton({ onPress }: { onPress: () => void }) {
 // ── Styles ────────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
-  center: { flex: 1, backgroundColor: Colors.background, justifyContent: 'center', alignItems: 'center', gap: 16, padding: 24 },
-  header: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingHorizontal: 24, paddingTop: 60, paddingBottom: 12,
-  },
-  back: { fontSize: FontSize.base, color: Colors.primary, fontWeight: FontWeight.semibold },
-  counter: { fontSize: FontSize.base, color: Colors.textSecondary, fontWeight: FontWeight.medium },
+  center:    { flex: 1, backgroundColor: Colors.background, justifyContent: 'center', alignItems: 'center', gap: 16, padding: 24 },
+  header:    { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 24, paddingTop: 60, paddingBottom: 12 },
+  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  back:      { fontSize: FontSize.base, color: Colors.primary, fontWeight: FontWeight.semibold },
+  counter:   { fontSize: FontSize.base, color: Colors.textSecondary, fontWeight: FontWeight.medium },
   scoreText: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.primaryDark },
-  progressBar: { height: 8, backgroundColor: Colors.border, marginHorizontal: 24, borderRadius: 4, overflow: 'hidden', marginBottom: 4 },
+  muteBtn:   { padding: 4 },
+  progressBar:  { height: 8, backgroundColor: Colors.border, marginHorizontal: 24, borderRadius: 4, overflow: 'hidden', marginBottom: 4 },
   progressFill: { height: '100%', backgroundColor: Colors.primary, borderRadius: 4 },
-  content: { padding: 24, paddingBottom: 120, gap: 20 },
-  instruction: { fontSize: FontSize.md, color: Colors.textSecondary, textAlign: 'center' },
+  content:   { padding: 24, paddingBottom: 120, gap: 20 },
+  instruction:  { fontSize: FontSize.md, color: Colors.textSecondary, textAlign: 'center' },
   wordSpeakRow: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 10 },
-  wordDisplay: { fontSize: FontSize['2xl'], fontWeight: FontWeight.extrabold, color: Colors.text, textAlign: 'center' },
-  speakIcon: { fontSize: 24 },
-  imageGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, justifyContent: 'center' },
-  imageOption: { borderWidth: 3, borderRadius: 16, overflow: 'hidden', width: '45%' },
-  optionImage: { width: '100%', aspectRatio: 1 },
-  mainImage: { width: '100%', height: 220, borderRadius: 20, backgroundColor: Colors.surfaceAlt },
+  wordDisplay:  { fontSize: FontSize['2xl'], fontWeight: FontWeight.extrabold, color: Colors.text, textAlign: 'center' },
+  imageGrid:    { flexDirection: 'row', flexWrap: 'wrap', gap: 12, justifyContent: 'center' },
+  imageOption:  { borderWidth: 3, borderRadius: 16, overflow: 'hidden', width: '45%' },
+  optionImage:  { width: '100%', aspectRatio: 1 },
+  imageLabel:   { textAlign: 'center', paddingVertical: 6, fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.text, backgroundColor: Colors.surface },
+  mainImage:    { width: '100%', height: 220, borderRadius: 20, backgroundColor: Colors.surfaceAlt },
   imagePlaceholder: { justifyContent: 'center', alignItems: 'center', backgroundColor: Colors.surfaceAlt },
-  placeholderText: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textSecondary },
-  wordOptions: { gap: 12 },
-  wordOption: { borderWidth: 2, borderRadius: 14, paddingVertical: 16, paddingHorizontal: 20, alignItems: 'center' },
+  placeholderText:  { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textSecondary },
+  wordOptions:  { gap: 12 },
+  wordOption:   { borderWidth: 2, borderRadius: 14, paddingVertical: 16, paddingHorizontal: 20, alignItems: 'center' },
   wordOptionText: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.text },
-  listenBtn: {
-    backgroundColor: Colors.primary, borderRadius: 60, paddingVertical: 24,
-    alignItems: 'center', gap: 6, marginHorizontal: 40,
-  },
-  listenEmoji: { fontSize: 40 },
-  listenLabel: { fontSize: FontSize.base, color: Colors.white, fontWeight: FontWeight.semibold },
-
-  // Result banner
-  resultBanner: {
-    flexDirection: 'row', alignItems: 'center', borderRadius: 18,
-    padding: 16, gap: 12, borderWidth: 1.5,
-  },
+  listenBtn:    { backgroundColor: Colors.primary, borderRadius: 60, paddingVertical: 24, alignItems: 'center', gap: 6, marginHorizontal: 40 },
+  listenEmoji:  { fontSize: 40 },
+  listenLabel:  { fontSize: FontSize.base, color: Colors.white, fontWeight: FontWeight.semibold },
+  resultBanner: { flexDirection: 'row', alignItems: 'center', borderRadius: 18, padding: 16, gap: 12, borderWidth: 1.5 },
   correctBanner: { backgroundColor: Colors.successLight + 'AA', borderColor: Colors.success },
-  wrongBanner: { backgroundColor: Colors.errorLight + 'AA', borderColor: Colors.error },
+  wrongBanner:   { backgroundColor: Colors.errorLight + 'AA', borderColor: Colors.error },
   resultBannerEmoji: { fontSize: 28 },
-  resultBannerText: { flex: 1, gap: 2 },
+  resultBannerText:  { flex: 1, gap: 2 },
   resultBannerTitle: { fontSize: FontSize.md, fontWeight: FontWeight.bold },
-  resultBannerSub: { fontSize: FontSize.sm, color: Colors.textSecondary },
-  nextBtn: {
-    backgroundColor: Colors.primary, borderRadius: 12,
-    paddingVertical: 10, paddingHorizontal: 16,
-  },
+  resultBannerSub:   { fontSize: FontSize.sm, color: Colors.textSecondary },
+  nextBtn:     { backgroundColor: Colors.primary, borderRadius: 12, paddingVertical: 10, paddingHorizontal: 16 },
   nextBtnText: { color: Colors.white, fontWeight: FontWeight.bold, fontSize: FontSize.sm },
-
-  // Results screen
   resultEmoji: { fontSize: 60 },
   resultTitle: { fontSize: FontSize['2xl'], fontWeight: FontWeight.extrabold, color: Colors.text },
-  resultSub: { fontSize: FontSize.md, color: Colors.textSecondary },
-  xpEarned: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.xp },
-  button: {
-    backgroundColor: Colors.primary, borderRadius: 14, paddingVertical: 14,
-    paddingHorizontal: 32, alignItems: 'center', width: '80%',
-  },
+  resultSub:   { fontSize: FontSize.md, color: Colors.textSecondary },
+  xpEarned:   { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.xp },
+  scoreBar:     { width: '100%', height: 10, backgroundColor: Colors.border, borderRadius: 5, overflow: 'hidden' },
+  scoreBarFill: { height: '100%', borderRadius: 5 },
+  button:       { backgroundColor: Colors.primary, borderRadius: 14, paddingVertical: 14, paddingHorizontal: 32, alignItems: 'center', width: '80%' },
   outlineButton: { backgroundColor: Colors.surface, borderWidth: 1.5, borderColor: Colors.border },
-  buttonText: { color: Colors.white, fontWeight: FontWeight.bold, fontSize: FontSize.md },
+  buttonText:   { color: Colors.white, fontWeight: FontWeight.bold, fontSize: FontSize.md },
+});
+
+const defStyles = StyleSheet.create({
+  card:       { backgroundColor: Colors.surface, borderRadius: 18, padding: 16, borderWidth: 1.5, borderColor: Colors.border, gap: 12 },
+  cardTitle:  { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.textSecondary },
+  wordRow:    { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  wordLeft:   { flex: 1, gap: 4 },
+  wordLabel:  { fontSize: FontSize.base, color: Colors.textSecondary },
+  wordName:   { fontWeight: FontWeight.extrabold, color: Colors.text, fontSize: FontSize.md },
+  definition: { fontSize: FontSize.sm, color: Colors.text, lineHeight: 20 },
+  definitionPlaceholder: { fontSize: FontSize.sm, color: Colors.textMuted, fontStyle: 'italic' },
+  speakBtn:   { backgroundColor: Colors.background, borderRadius: 20, padding: 8, borderWidth: 1.5, borderColor: Colors.border, marginTop: 2 },
+  speakBtnMuted: { borderColor: Colors.border, opacity: 0.5 },
+  divider:    { height: 1, backgroundColor: Colors.border },
 });
 
 const fab = StyleSheet.create({
-  btn: {
-    position: 'absolute',
-    bottom: 32,
-    right: 20,
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: Colors.surfaceAlt,
-    borderWidth: 1.5,
-    borderColor: Colors.border,
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: Colors.black,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.12,
-    shadowRadius: 6,
-    elevation: 4,
-  },
+  btn:  { position: 'absolute', bottom: 32, right: 20, width: 44, height: 44, borderRadius: 22, backgroundColor: Colors.surfaceAlt, borderWidth: 1.5, borderColor: Colors.border, justifyContent: 'center', alignItems: 'center', shadowColor: Colors.black, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.12, shadowRadius: 6, elevation: 4 },
   icon: { fontSize: 18, color: Colors.textSecondary },
 });
 
 const sheet = StyleSheet.create({
-  backdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.35)',
-  },
-  container: {
-    backgroundColor: Colors.surface,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    padding: 28,
-    paddingBottom: 48,
-    gap: 20,
-  },
-  handle: {
-    width: 40, height: 4, borderRadius: 2,
-    backgroundColor: Colors.border,
-    alignSelf: 'center',
-    marginBottom: 4,
-  },
-  title: {
-    fontSize: FontSize.lg, fontWeight: FontWeight.bold,
-    color: Colors.text, textAlign: 'center',
-  },
-  wordChip: {
-    alignSelf: 'center',
-    backgroundColor: Colors.background,
-    borderRadius: 20,
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-    fontSize: FontSize.base,
-    color: Colors.textSecondary,
-  },
-  rateRow: { flexDirection: 'row', gap: 14 },
-  rateBtn: {
-    flex: 1, borderRadius: 16, paddingVertical: 18,
-    alignItems: 'center', gap: 8, borderWidth: 1.5,
-  },
-  upBtn: { backgroundColor: Colors.successLight + '55', borderColor: Colors.success },
-  downBtn: { backgroundColor: Colors.errorLight + '55', borderColor: Colors.error },
-  rateEmoji: { fontSize: 30 },
+  backdrop:    { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)' },
+  container:   { backgroundColor: Colors.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 28, paddingBottom: 48, gap: 20 },
+  handle:      { width: 40, height: 4, borderRadius: 2, backgroundColor: Colors.border, alignSelf: 'center', marginBottom: 4 },
+  title:       { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.text, textAlign: 'center' },
+  wordChip:    { alignSelf: 'center', backgroundColor: Colors.background, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 6, fontSize: FontSize.base, color: Colors.textSecondary },
+  rateRow:     { flexDirection: 'row', gap: 14 },
+  rateBtn:     { flex: 1, borderRadius: 16, paddingVertical: 18, alignItems: 'center', gap: 8, borderWidth: 1.5 },
+  upBtn:       { backgroundColor: Colors.successLight + '55', borderColor: Colors.success },
+  downBtn:     { backgroundColor: Colors.errorLight + '55', borderColor: Colors.error },
+  rateEmoji:   { fontSize: 30 },
   rateBtnLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.text },
-  thanks: { alignItems: 'center', gap: 12, paddingVertical: 12 },
+  thanks:      { alignItems: 'center', gap: 12, paddingVertical: 12 },
   thanksEmoji: { fontSize: 40, color: Colors.success },
-  thanksText: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.textSecondary },
+  thanksText:  { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.textSecondary },
+});
+
+const toast = StyleSheet.create({
+  container: { position: 'absolute', top: 110, left: 20, right: 20, zIndex: 100, backgroundColor: '#1A1A2E', borderRadius: 16, paddingVertical: 12, paddingHorizontal: 18, alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 12, elevation: 10 },
+  text:      { color: Colors.white, fontWeight: FontWeight.bold, fontSize: FontSize.base },
 });
