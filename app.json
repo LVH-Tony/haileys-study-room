@@ -25,6 +25,8 @@
       "package": "com.lvhtony.haileysStudyRoom",
       "permissions": [
         "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.RECORD_AUDIO",
         "android.permission.MODIFY_AUDIO_SETTINGS"
       ]
     },
@@ -67,6 +69,12 @@
       "eas": {
         "projectId": "c5c0d015-db74-468d-a0fb-e081dedbf9f1"
       }
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/c5c0d015-db74-468d-a0fb-e081dedbf9f1"
     }
   }
 }
